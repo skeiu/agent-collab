@@ -15,6 +15,8 @@
 | D20–D23 | 任务进程、改动基线、版本、并发和原子性 | 【已确认】确认人：用户（PLAN.md 头部记载，未写姓名）；2026-10-23 | PLAN.md 头部 |
 | PLAN.md §9.5（无编号） | dsh 执行端的工具预设：整份复制 `standard`、去掉 `tool-ask-user`，作为 `agent-collab` 预设；由 `doctor` 比对它和 dsh 自带的 `standard` 是否一致 | 【已确认】确认人：用户，2026-10-23 | 1a 第 1 批实验 01（dsh 不支持派生） |
 | 1a 第 1 批结论回填 | PLAN.md §5.4、§5.6、§8、§9.2、§9.4、§9.5、§10、§11.4、§11.5、§14.5、§15、§16、§17、T17 按实验结论修改，含 dsh 执行端防套娃变量改为 `DSH_AGENT_COLLAB_ROLE` | 【已确认】确认人：用户，2026-10-23（审阅 diff 后同意） | [experiments/1a/REPORT.md](../../experiments/1a/REPORT.md) |
+| Claude 侧结论回填 | PLAN.md D20、§8、§15、§17 按 §17 第 8、16、17 项实测结论修改：命令带 `agent-collab:` 前缀（文中 `/collab` 为简称）、`allowed-tools` 用只放行 `collab.mjs` 的窄规则、D20 的 detached 工作进程在 Linux 终端和 Desktop 下实测存活 | 【已确认】确认人：用户，2026-10-23（审阅 diff 后同意） | [experiments/1a/REPORT.md](../../experiments/1a/REPORT.md) 末节 |
+| Desktop 里插件相关的验证推迟到 T20 | Desktop 的 Code 标签页里 SessionStart hook、`/plugin` 安装操作、命令短名，等 1b 插件真正安装时随 T20 一起验证；1a 开发期在终端用 `claude --plugin-dir` 加载插件 | 【已确认】确认人：用户，2026-10-23 | 被否决的替代方案：现在通过本地插件市场把测试插件装进用户的 Claude 配置，测完再卸载 |
 
 ## 被否决的替代方案
 

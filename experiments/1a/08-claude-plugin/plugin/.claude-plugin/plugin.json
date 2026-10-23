@@ -1,0 +1,5 @@
+{
+  "name": "agent-collab",
+  "version": "0.0.0-probe",
+  "description": "§17 第 8、16 项的测试插件：只往 $PROBE_OUT 写标记，不做别的"
+}

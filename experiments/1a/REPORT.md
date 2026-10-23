@@ -71,3 +71,19 @@
 - `npm test`：3/3 通过（2026-10-23 执行；`node --test` 未发现实验目录中的文件）。
 - 每个 `run.mjs` 都在临时 `DSH_HOME` 下执行，使用 `dsh web --port 0 --no-open`；结束时按自己 spawn 的 PID 停止 Web 进程并删除临时目录。
 - 实验完成后复查：无遗留的 `agent-collab-1a-*` 临时目录，无遗留的被测 dsh 进程；`pgrep -af dsh` 只显示当前沙箱自己的进程。
+
+## Claude 侧：§17 第 8、16、17 项（Claude 实测，2026-10-23）
+
+实验目录：`experiments/1a/08-claude-plugin/`（第 8、16 项）、`experiments/1a/17-worker-survival/`（第 17 项）。都用 `claude -p` 实测（Claude Code 2.1.309，Haiku），共调用模型 11 次（其中 2 次因命令写法不匹配权限规则而重跑），花费约 0.035 美元。
+
+| 编号 | 问题 | 结论 | 关键证据 | 对 PLAN.md 的影响 |
+|---|---|---|---|---|
+| 8 | 命令名前缀 | 带前缀；`-p` 下短名不可用 | init 里是 `agent-collab:probe-cmd`；`/probe-cmd` 回复“isn't available” | §8 等处的 `/collab` 应写成 `/agent-collab:collab`；交互模式下短名【未验证】 |
+| 8 | skill 怎么引用插件目录 | `${CLAUDE_PLUGIN_ROOT}` 可用 | skill、命令正文和 `allowed-tools` 里都替换成绝对路径；hook 环境变量里也有 | skill 直接写 `node "${CLAUDE_PLUGIN_ROOT}/bin/collab.mjs" …` |
+| 8 | SessionStart hook | `-p` 下运行 | stream-json 有 `hook_response`，标记文件写出 | Desktop 下【未验证】 |
+| 8 | Monitor | 可用 | `-p` 的工具清单有 Monitor；Desktop 的 Code 标签页里本验收会话的工具清单也有 Monitor | 无 |
+| 8 | `!` 预执行 | `-p` 下不执行 | 原样留在文本里 | 设计不依赖它，无影响 |
+| 8 | Desktop 里 `/plugin` 怎么操作 | 【未验证】 | 需要用户在 Desktop 里操作 | — |
+| 16 | `allowed-tools` 放行 `collab` | 成立 | `Bash(node:*)` 放行、对照组被拒；窄规则 `Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/probe.mjs":*)` 只放行这一个脚本 | §8：用窄规则只放行 `collab.mjs` |
+| 17 | 会话结束后工作进程能否存活 | CLI 下成立 | detached + unref：`claude -p` 退出后心跳继续；`run_in_background`：`claude -p` 会等它跑完才退出 | D20 的做法可行；不能用 `run_in_background` 跑工作进程。Desktop：用户在 Code 标签页新开会话启动 detached 工作进程后删除该会话，进程继续写心跳，父进程变为 `systemd --user`，【已验证】2026-10-23。Windows【未验证】 |
+

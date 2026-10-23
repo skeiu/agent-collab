@@ -6,9 +6,9 @@
 
 第 1a 阶段第一步：技术验证（[PLAN.md](../PLAN.md) §15“1a：核心闭环”表格、§17）。分工不变：dsh 写代码，Claude 检查验收。按依赖分三组（AI 拟定，2026-10-23）：
 
-- **第 1 批，交给 dsh**：§17 第 2、1、3、6、7、18、12 项。都在隔离的被测 dsh 里做，尽量不需要模型。
+- **第 1 批，交给 dsh**：§17 第 2、1、3、6、7、18、12 项。已完成并回填 PLAN.md。
 - **第 2 批，交给 dsh**：§17 第 4 项（审批和提问能否从会话事件里观察到），以及第 1 批里标为“需要模型”的部分。被测 dsh 用什么模型配置由用户决定后再做。
-- **Claude 侧，Claude 自己做**：§17 第 8、16、17 项（Claude Code 插件的命令前缀、`allowed-tools`、会话结束后后台进程能否存活）。
+- **Claude 侧，Claude 自己做**：§17 第 8、16、17 项。已完成并回填 PLAN.md（Desktop 插件部分推迟到 T20）。
 
 全部结论经用户确认后回填 PLAN.md，才能进入 1a 的实现（§15“进入 1b 的条件”同理）。
 
@@ -24,18 +24,24 @@
 6. **不碰用户的 dsh**：不读写 `~/.dsh`（包括其中的凭据、`.env`、会话），不访问 dsh 的默认端口，不对默认 `DSH_HOME` 运行任何 `dsh` 命令。
 7. **审批**：本阶段 dsh 发出的越权审批，用户一律拒绝；需要越权才能做的实验，记为发现并汇报。
 
-## 验收标准（第 1 批，AI 拟定，2026-10-23）
+## Claude 侧验证：§17 第 8、16、17 项（AI 拟定，2026-10-23）
 
-1. 每项一个实验目录 `experiments/1a/<两位编号>-<短名>/`（编号用 §17 的编号），包括：
-   - `run.mjs`：只用 Node 内置模块，一条命令跑完，依次建临时环境、启动被测 dsh、检查、清理；
-   - `README.md`：目的、对应 §17 编号、运行方法、前置条件。
-2. 实验文件名不匹配 `node --test` 的默认发现规则：不叫 `*.test.*`、`test-*`、`*-test.*`、`*_test.*`，也不放在名为 `test` 的目录里。`npm test` 仍是 3/3，CI 不受影响。
-3. 符合上面的 R6 隔离要求。Claude 核对两点：实验前后用户日常 dsh Web 的 PID 不变；`~/.dsh/profiles/*/package.json` 和插件目录没有变化。
-4. 每项给出结论：成立 / 不成立 / 部分成立 / 需要模型（未做），附关键输出摘录。不成立的，写明 PLAN.md §15 表格里的后备方案会影响哪些章节。全部汇总在 `experiments/1a/REPORT.md`。
-5. 可复现：Claude 在自己的环境里重跑每个 `run.mjs`，结论一致才标【已验证】。
-6. 无本机信息：代码和报告里不出现用户名、个人路径、本地网关，端口只能出现 dsh 默认值；路径用 `$DSH_HOME`、`<dsh包目录>` 等占位。按 [RUNBOOK.md](RUNBOOK.md)“提交前检查本机信息”扫描无命中。
-7. 执行端不提交、不推送，不改 PLAN.md、AGENTS.md 和 `docs/context/`。PLAN.md 的回填由 Claude 起草、用户确认后再改。
-8. 清理：实验结束后，自己启动的进程都已退出，临时目录都已删除。
+**做法**
+
+- 测试插件放在 `experiments/1a/08-claude-plugin/` 等目录，用 `claude -p --plugin-dir <目录>` 临时加载，不安装插件、不改 `~/.claude` 的设置。每次调用都加 `--permission-mode default --no-session-persistence --strict-mcp-config --max-budget-usd 0.5`；hook 和脚本只写临时目录。
+- 第 8 项：从 `stream-json` 的 init 消息读出加载到的命令、skill 名和工具清单，看有没有插件名前缀、有没有 Monitor；分别实测 `/collab` 短名和带前缀的命令能否调用；skill 里用 `${CLAUDE_PLUGIN_ROOT}` 和相对路径各引用一个脚本，看哪种能跑；SessionStart hook 是否运行（写标记文件）、输出出现在哪里。
+- 第 16 项：skill frontmatter 的 `allowed-tools` 放行运行插件脚本的 Bash 命令，在 `default` 权限模式的 `-p` 下调用（没人批准，未放行的工具直接被拒），看能否执行；对照组不写 `allowed-tools`。
+- 第 17 项：让 `claude -p` 通过 Bash 启动一个脱离父进程的工作进程（`detached` + `unref`，每秒写一次心跳，持续 60 秒），`claude -p` 退出后检查心跳是否还在继续；对照组用普通的 `&` 后台运行。
+- 需要用户在 Desktop 里操作的部分：Code 标签页里 hook 是否运行、输出在哪；`/plugin` 怎么操作；Monitor 能不能用；关掉会话后工作进程是否存活。Claude 给出步骤、核对结果。Windows 上怎么脱离父进程，本机测不了，标【未验证】。
+
+**验收标准**
+
+1. 每项一个目录，有一条命令可重跑的脚本和 README，结论附关键输出摘录；汇总写进 `experiments/1a/REPORT.md` 新增的一节。
+2. 不改 `~/.claude` 的设置、插件安装和权限；所有写入都在临时目录；结束后不留进程。
+3. 模型调用控制在 10 次左右，每次有花费上限，总花费写进报告。
+4. 无本机信息（按 [RUNBOOK.md](RUNBOOK.md)“提交前检查本机信息”扫描）。
+5. Desktop 部分写明由用户操作及日期；做不了的标【未验证】并说明原因。
+6. PLAN.md 回填先给用户审阅 diff，确认后再改。
 
 第 1a、1b 阶段的产品验收：见 PLAN.md §15“验收”表（T1–T26）。
 
@@ -44,14 +50,14 @@
 - 2026-10-23 建立基础文档和根目录 `CLAUDE.md`（只含导入行 `@AGENTS.md`）。【已验证】2026-10-23：文档检查见 [RUNBOOK.md](RUNBOOK.md)“文档维护”，`claude -p` 实测新会话能加载 AGENTS.md（[RISKS.md](RISKS.md) R4）。用户验收：尚未进行。
 - 2026-10-23 第 0 阶段完成：dsh 实现、Claude 验收，8 条全部通过，三平台 CI 通过；已推送到 `origin/main`（[history/2026-10-23-phase0.md](history/2026-10-23-phase0.md)）。用户验收：尚未进行。
 - 2026-10-23 仓库清理了本机信息；PLAN.md 随仓库公开（[DECISIONS.md](DECISIONS.md)）。
-- 2026-10-23 第 1 批技术验证由 dsh 完成（结论见 [REPORT.md](../../experiments/1a/REPORT.md)），Claude 按上面 8 条验收，**全部通过**，【已验证】2026-10-23：
-  - 结论：02、03、12 成立；01 不成立（只能整份复制 standard）；06、07、18 部分成立。对 PLAN.md 的影响见 REPORT.md 末节，待用户确认后回填。
-  - 第 5 条：Claude 用与 dsh 沙箱相同的 bwrap 参数逐个重跑 7 个 `run.mjs`，RESULT 行与报告一致；并对照 dsh 源码抽查了 02（预设文件）、06（`DSH_` 前缀校验）、18（PATH 上的 pnpm）。
-  - 第 3 条：dsh 会话在任务开始前切到 `workspace-write`；第 0 步实测沙箱 PID 隔离生效（PID 1 为 `bwrap --unshare-pid`）；用户 dsh Web 的 PID、`~/.dsh` 下 profile 列表和配置哈希与派任务前的基线一致。
-  - 第 2、6、8 条：`npm test` 3/3；本机信息扫描无命中（`127.0.0.1:9` 是故意不可达的地址）；宿主机上无遗留进程、临时目录和锁目录。
-  - 第 7 条：dsh 未提交；应用户第二轮指令改了 NOW.md 三处，属用户授权。
-  - 发现：harness 没有重定向 `XDG_RUNTIME_DIR`，在只读的 `/run/user/<uid>` 下 pnpm 失败；在不加沙箱的宿主机上会往临时目录外写锁目录。已补进 R6 第 4 条；Claude 按用户要求修了 harness，在 `/run/user` 只读的 bwrap 里重跑 7 项全部通过、结论不变，【已验证】2026-10-23。
+- 2026-10-23 第 1 批技术验证：dsh 实现、Claude 验收，8 条全部通过（[history/2026-10-23-1a-batch1.md](history/2026-10-23-1a-batch1.md)）；harness 补了 `XDG_RUNTIME_DIR`。
 - 2026-10-23 第 1 批结论经用户审阅 diff 后回填 PLAN.md（§5.4、§5.6、§9.2、§9.4、§9.5、§10、§11.4、§11.5、§14.5、§15、§16、§17 等）；01 采用整份复制 `standard`（[DECISIONS.md](DECISIONS.md)）。
+- 2026-10-23 Claude 侧验证（§17 第 8、16、17 项）CLI 部分完成，结论见 [REPORT.md](../../experiments/1a/REPORT.md) 末节，【已验证】2026-10-23：
+  - 命令带 `agent-collab:` 前缀，短名不可用；`${CLAUDE_PLUGIN_ROOT}` 在 skill、命令和 `allowed-tools` 里都会替换；`-p` 下 SessionStart hook 运行、有 Monitor。
+  - `allowed-tools` 窄规则只放行一个脚本；detached 工作进程在 `claude -p` 退出后存活，`run_in_background` 会让 `-p` 等它结束。
+  - 调用模型 11 次，约 0.035 美元；无遗留进程和临时目录。
+  - Desktop：用户新开 Code 会话启动 detached 工作进程后删除会话，进程继续运行、父进程变为 `systemd --user`，【已验证】2026-10-23。
+  - 结论经用户审阅 diff 后回填 PLAN.md（D20、§8、§15、§17）。Desktop 里插件的 hook、`/plugin` 操作和短名，用户同意推迟到 1b 的 T20；Windows 留到第 2 阶段。
 
 ## 阻塞与待核实
 
@@ -62,10 +68,9 @@
 
 ## 下一步
 
-1. Claude 做 §17 第 8、16、17 项的验证。
-2. 用户决定第 2 批的模型配置；第 2 批和 Claude 侧都完成并回填后，才进入 1a 实现。
-3. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
-4. 每次推送仍须用户授权。
+1. 用户决定第 2 批（§17 第 4 项）的模型配置；第 2 批完成并回填后，技术验证结束，才进入 1a 实现。
+2. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
+3. 每次推送仍须用户授权。
 
 ## 证据入口
 

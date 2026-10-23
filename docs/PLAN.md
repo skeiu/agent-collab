@@ -1,6 +1,6 @@
 # agent-collab 方案
 
-> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文。
+> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文；Claude 侧（第 8、16、17 项）的结论也已回填。
 > 来源：2026-10-23 的设计讨论。同日复查时对照 dsh 源码更正了两处事实（权限预设、提问工具），并补充了 D20–D23 和相关细节（D20–D23 已经用户确认）。
 > 本文描述的是**通用产品**的设计，不针对某一台机器。所有和环境有关的信息（工具装在哪、用哪家模型服务商、端口、磁盘类型等）都靠运行时探测和配置获得。
 > 关于 dsh 行为的事实，依据是 dsh 0.2.1-rc.2 的源码、文档和一台 Linux 开发机上的实测（实测记录见附录 A）。实现时如果发现 dsh 新版本的行为不同，以实际情况为准，并回头更新本文。
@@ -64,7 +64,7 @@
 | D17 | 安装确认 | **首次安装确认一次**（列出每个工具要装什么），之后插件升级时**自动同步**。只有出现新的部件类型、或检测到新装的工具时，才再确认一次 |
 | D18 | 角色可互换 | 设计端和执行端可以任意组合，包括同一个工具同时担任两端（另开会话）。每个设计端有默认执行端，单个任务可以临时指定 |
 | D19 | 模型服务商 | **不假设任何特定的服务商或网关**。各执行端默认沿用它自己的模型配置；agent-collab 只在用户明确指定时覆盖模型，思考强度按 D13 处理，**从不写入服务商配置** |
-| D20 | 任务进程 | `collab run start` 启动一个独立的后台工作进程，由它连接执行端、写运行目录，然后立即返回任务号。设计端用 `collab run wait` 等结束，用 `watch.mjs` 看进度。设计端会话关闭或重启，任务照常进行，新会话用 `collab run status` 找回 |
+| D20 | 任务进程 | `collab run start` 启动一个独立的后台工作进程，由它连接执行端、写运行目录，然后立即返回任务号。设计端用 `collab run wait` 等结束，用 `watch.mjs` 看进度。设计端会话关闭或重启，任务照常进行，新会话用 `collab run status` 找回。已实测：用 `detached` 加 `unref` 启动的进程，在终端 `claude -p` 退出、Desktop 删除会话后都继续运行（Linux）；Bash 工具的 `run_in_background` 会让 `claude -p` 等它结束，不能用来跑工作进程 |
 | D21 | 改动基线 | 派发时给工作区拍一个快照作为基线，包括未跟踪文件，不包括被忽略的文件。做法是用临时 index 生成 git tree 对象：不改分支、不写 ref、不动用户的 index。补丁就是当前工作区相对快照的差异，所以设计端预先写的验收测试、用户原有的未跟踪文件，都不会算成执行端的改动 |
 | D22 | 版本 | 插件、运行时、桥接用同一个版本号；另设一个整数的协议版本，在 `initialize` 里协商。运行时已升级、桥接还没更新时（比如任务正在跑，同步被推迟），只要协议版本兼容就照常用；不兼容就退回 acp 并提示 |
 | D23 | 并发和原子性 | 同一仓库同时只允许一个运行中的任务：运行目录里加锁，持锁进程不在了锁自动失效。安装和同步加全局锁，先装到临时目录再改名，中途失败不会留下半套运行时 |
@@ -319,7 +319,9 @@ agent-collab/
 
 下面的"设计端"在第 1 阶段就是 Claude。
 
-skill 设置 `disable-model-invocation: true`，只有用户手动输入才会触发。另外，派发时会给执行端加上防套娃标记（`AGENT_COLLAB_ROLE=executor`，dsh 执行端为 `DSH_AGENT_COLLAB_ROLE=executor`，见 11.4），防止执行端再往外派任务。skill 的 frontmatter 还用 `allowed-tools` 放行 `collab` 命令，免得每一步都弹权限确认（能否这样用待确认，第 17 节第 16 项）。
+本文写的 `/collab`、`/collab-setup`、`/collab-config` 是简称。插件里的命令和 skill 都带插件名前缀，实际要输入 `/agent-collab:collab` 等；实测终端 `claude -p` 下短名不可用，交互模式和 Desktop 里能否用短名在 T20 一并确认。
+
+skill 设置 `disable-model-invocation: true`，只有用户手动输入才会触发。另外，派发时会给执行端加上防套娃标记（`AGENT_COLLAB_ROLE=executor`，dsh 执行端为 `DSH_AGENT_COLLAB_ROLE=executor`，见 11.4），防止执行端再往外派任务。skill 的 frontmatter 还用 `allowed-tools` 放行 `collab` 命令，免得每一步都弹权限确认。已实测可行，而且要写成只放行启动器的窄规则：`Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/collab.mjs":*)`，其中的 `${CLAUDE_PLUGIN_ROOT}` 会被替换成插件目录；skill 正文同样用 `node "${CLAUDE_PLUGIN_ROOT}/bin/collab.mjs" …` 调用。
 
 ### 阶段 0：预检
 
@@ -824,10 +826,10 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 | 4. 审批和提问能否从会话事件里观察到 | 看不到"等待审批"，卡死检测只能放宽 | 待验证（需要模型） |
 | 6. 能否给单个会话的 shell 注入环境变量 | 防套娃只能靠任务书约束；`executors.dsh.env` 在桥接模式下不生效 | 部分成立：只能用 `DSH_` 开头的变量（11.4） |
 | 7. 装或更新插件后要不要重启 dsh Web | 影响 1b 的自动同步设计 | 部分成立：新装可热加载，更新要重启（5.6、14.5） |
-| 8. Claude Code 插件：命令名前缀、Monitor、skill 怎么引用插件目录 | 影响 skill 的写法和用户要输入的命令 | 待验证 |
+| 8. Claude Code 插件：命令名前缀、Monitor、skill 怎么引用插件目录 | 影响 skill 的写法和用户要输入的命令 | 部分成立：带前缀；`${CLAUDE_PLUGIN_ROOT}` 可用；hook 运行、Monitor 可用。Desktop 里插件的部分留到 T20（第 8 节、第 17 节） |
 | 12. 生成 acp 覆盖层是否可行 | 退回模式拿不到用户在 dsh 里的模型设置 | 成立（11.5） |
-| 16. skill 的 `allowed-tools` 能否放行 `collab` 命令 | 每一步都要用户点确认，体验差，但不影响功能 | 待验证 |
-| 17. Claude 会话结束后，独立的工作进程能否存活 | D20 要换实现方式 | 待验证 |
+| 16. skill 的 `allowed-tools` 能否放行 `collab` 命令 | 每一步都要用户点确认，体验差，但不影响功能 | 成立，可写窄规则（第 8 节） |
+| 17. Claude 会话结束后，独立的工作进程能否存活 | D20 要换实现方式 | Linux 终端和 Desktop 下成立（D20）；Windows 待验证 |
 | 18. 安装桥接时 pnpm 是否需要联网 | 影响 1b 的安装设计；离线环境要在文档里写明 | 部分成立：首次取得 pnpm 要联网，之后可离线（5.6、9.4） |
 
 实验代码和报告在 `experiments/1a/`，每项一条命令可重跑。
@@ -945,11 +947,12 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 6. 桥接能否给单个 dsh 会话的 shell 注入环境变量（11.4 防套娃）。**已验证：可以，但键名必须以 `DSH_` 开头。**
 7. 装或更新插件后，热重载能否生效，还是必须重启 dsh Web（5.6、14.5）。**已验证：新装生效，更新要重启。**
 8. Claude Code 插件：
-   - skill 内容里能否引用插件根目录（比如 `${CLAUDE_PLUGIN_ROOT}`），还是要靠"skill 所在目录"的相对路径。
-   - `SessionStart` hook 在终端和 Desktop 的 Code 标签页里是否都能运行，输出显示在哪里。
-   - `/plugin marketplace add`、`/plugin install` 在 Desktop 里怎么操作。
-   - Monitor 工具在终端和 Desktop 里是否都能用。
-   - 插件里的 skill 和命令会带插件名前缀（比如 `/agent-collab:collab`）。用户实际要输入什么、能不能用短名 `/collab`，需要确认；本文写的 `/collab` 等命令名以确认结果为准。
+   - skill 内容里能否引用插件根目录（比如 `${CLAUDE_PLUGIN_ROOT}`），还是要靠"skill 所在目录"的相对路径。**已验证：`${CLAUDE_PLUGIN_ROOT}` 在 skill 正文、命令正文和 `allowed-tools` 里都会被替换；相对 skill 目录的路径也能用。**
+   - `SessionStart` hook 在终端和 Desktop 的 Code 标签页里是否都能运行，输出显示在哪里。**终端已验证：会运行，`-p` 下输出在 stream-json 的 `hook_response` 事件里，运行时有环境变量 `CLAUDE_PLUGIN_ROOT`。Desktop 留到 T20。**
+   - `/plugin marketplace add`、`/plugin install` 在 Desktop 里怎么操作。**留到 T20（届时插件真正安装）。**
+   - Monitor 工具在终端和 Desktop 里是否都能用。**已验证：都能用。**
+   - 插件里的 skill 和命令会带插件名前缀（比如 `/agent-collab:collab`）。用户实际要输入什么、能不能用短名 `/collab`，需要确认；本文写的 `/collab` 等命令名以确认结果为准。**已验证：带前缀；终端 `claude -p` 下短名不可用。交互模式和 Desktop 留到 T20。**
+   - 另外发现：命令正文里的 `!` 预执行在 `claude -p` 下不执行。本设计不依赖它。
 9. codex 作为设计端时，用 skill 目录还是 `codex plugin`；codex 的 skill 目录在各平台上的位置（第 3 阶段）。
 10. dsh 作为设计端时，后台任务和 `job_output` 的具体用法（第 3 阶段）。
 11. claude 执行端的具体 CLI 参数：三个权限级别分别怎么对应（11.9）、有没有结构化输出参数（第 13 节）（第 2 阶段）。
@@ -957,8 +960,8 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 13. 桥接能否从 dsh 的服务目录列出可选模型，给配置页用（9.2、12.3）。
 14. 怎么在不消耗太多 token 的前提下，检查 codex、claude 实际会用的端点和模型（11.8）。
 15. dsh 桌面版（Electron 管理的 `desktop` profile）能否、以及怎么安装桥接（5.6）。
-16. Claude Code 插件里的 skill，能否用 frontmatter 的 `allowed-tools` 放行 `collab` 命令（第 8 节）。
-17. Claude 会话结束时（包括在 Desktop 里关掉会话），从 Bash 启动的独立工作进程能否存活；Windows 上用什么方式脱离父进程（D20）。
+16. Claude Code 插件里的 skill，能否用 frontmatter 的 `allowed-tools` 放行 `collab` 命令（第 8 节）。**已验证：可以，并且能写成只放行一个脚本的窄规则。**
+17. Claude 会话结束时（包括在 Desktop 里关掉会话），从 Bash 启动的独立工作进程能否存活；Windows 上用什么方式脱离父进程（D20）。**Linux 已验证：终端和 Desktop 下都能存活（`detached` 加 `unref`）。Windows 待验证（第 2 阶段 Windows 验证时做）。**
 18. `dsh plugin add <tgz>` 时 pnpm 是否需要联网，离线机器能否安装（9.4）。**已验证：首次取得 pnpm 要联网，之后可离线。**
 19. 桥接能否拿到 dsh Web 的访问地址，生成直达某个会话的链接（9.1）。
 
