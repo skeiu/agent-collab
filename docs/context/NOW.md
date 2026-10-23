@@ -4,56 +4,73 @@
 
 ## 当前目标
 
-第 0 阶段：仓库准备（[PLAN.md](../PLAN.md) §15）。用户 2026-10-23 要求开始实施，分工为 dsh 写代码、Claude 检查验收。之后是第 1a 阶段（先做技术验证）。
+第 1a 阶段第一步：技术验证（[PLAN.md](../PLAN.md) §15“1a：核心闭环”表格、§17）。分工不变：dsh 写代码，Claude 检查验收。按依赖分三组（AI 拟定，2026-10-23）：
 
-## 验收标准
+- **第 1 批，交给 dsh**：§17 第 2、1、3、6、7、18、12 项。都在隔离的被测 dsh 里做，尽量不需要模型。
+- **第 2 批，交给 dsh**：§17 第 4 项（审批和提问能否从会话事件里观察到），以及第 1 批里标为“需要模型”的部分。被测 dsh 用什么模型配置由用户决定后再做。
+- **Claude 侧，Claude 自己做**：§17 第 8、16、17 项（Claude Code 插件的命令前缀、`allowed-tools`、会话结束后后台进程能否存活）。
 
-第 0 阶段（AI 按 PLAN.md §15 细化，2026-10-23）：
+全部结论经用户确认后回填 PLAN.md，才能进入 1a 的实现（§15“进入 1b 的条件”同理）。
 
-1. 项目根是 git 仓库，默认分支 `main`；`core.fileMode=false`（开发分区没有权限位，见 [RISKS.md](RISKS.md) R2）；有 `.gitignore` 和 `.gitattributes`（文本统一 LF）。
-2. 根目录 `package.json`：`"type": "module"`、`engines.node >= 20`，没有任何依赖；`npm test` 跑 `node --test`，`npm run build` 跑 `node scripts/build.mjs`；不需要 `npm install`。
-3. `scripts/build.mjs` 能运行并退出 0，只用内置模块，用 `import.meta.url` 定位仓库；本阶段没有可构建的内容，逐项说明未实现的步骤。
-4. `tests/` 下至少有冒烟测试（包括 build 能跑通、package.json 没有依赖），临时文件只用 `os.tmpdir()`；Linux 本机 `npm test` 通过。
-5. `.github/workflows/ci.yml`：Linux、Windows、macOS 三个平台 × Node 20 和一个当前 LTS 版本，只跑测试，不 `npm install`。本地只能核对 YAML 能解析；三平台实际运行要推送到远程仓库后才能验证，在此之前标【未验证】。
-6. 代码和配置里没有写死的路径、端口或机器相关的值（grep 检查）。
-7. 新建 `docs/dev-setup.md`：开发前置条件和跑测试的命令；1a 的手动安装步骤到 1a 再补。
-8. 执行端不提交、不推送，不改 PLAN.md 和 `docs/context/`，不碰 dsh 进程和 `~/.dsh`（RISKS.md R6）；首次提交在验收后由用户授权。
+## R6 隔离要求（第 1a 阶段起，所有 dsh 任务都适用）
 
-第 1a、1b 阶段：见 PLAN.md §15“验收”表（T1–T26）。
+依据 [RISKS.md](RISKS.md) R6：写代码的 dsh 会话跑在用户日常的 dsh Web 里，被测的 dsh 必须与它隔离。
+
+1. **派任务前**：用户在 dsh Web 里把这个会话的权限切到 `workspace-write`，确认显示的是 `workspace-write` 后再贴任务书。
+2. **第一步自检**：任务书第一步运行 `pgrep -af dsh` 和 `cat /proc/1/cmdline | tr '\0' ' '`，原样汇报。看到用户日常的 dsh Web 进程，说明沙箱没有隔离进程，**停下来汇报**，由用户决定是否继续。
+3. **被测 dsh 一律用临时环境**：`DSH_HOME` 设为 `os.tmpdir()` 下新建的目录，`dsh web` 加 `--port 0 --no-open`，从输出里解析实际端口。脚本运行任何 `dsh` 命令前都要断言 `DSH_HOME` 位于临时目录下，否则退出。
+4. **缓存重定向到临时目录**：`COREPACK_HOME`、`npm_config_cache`、`PNPM_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`XDG_RUNTIME_DIR`（pnpm 12 把 store 操作锁建在这里，2026-10-23 验收时发现）。
+5. **只停自己启动的进程**：按自己 spawn 得到的 PID 停止，禁止 `kill`/`pkill`/`killall`/`fuser` 按名字或端口找进程。
+6. **不碰用户的 dsh**：不读写 `~/.dsh`（包括其中的凭据、`.env`、会话），不访问 dsh 的默认端口，不对默认 `DSH_HOME` 运行任何 `dsh` 命令。
+7. **审批**：本阶段 dsh 发出的越权审批，用户一律拒绝；需要越权才能做的实验，记为发现并汇报。
+
+## 验收标准（第 1 批，AI 拟定，2026-10-23）
+
+1. 每项一个实验目录 `experiments/1a/<两位编号>-<短名>/`（编号用 §17 的编号），包括：
+   - `run.mjs`：只用 Node 内置模块，一条命令跑完，依次建临时环境、启动被测 dsh、检查、清理；
+   - `README.md`：目的、对应 §17 编号、运行方法、前置条件。
+2. 实验文件名不匹配 `node --test` 的默认发现规则：不叫 `*.test.*`、`test-*`、`*-test.*`、`*_test.*`，也不放在名为 `test` 的目录里。`npm test` 仍是 3/3，CI 不受影响。
+3. 符合上面的 R6 隔离要求。Claude 核对两点：实验前后用户日常 dsh Web 的 PID 不变；`~/.dsh/profiles/*/package.json` 和插件目录没有变化。
+4. 每项给出结论：成立 / 不成立 / 部分成立 / 需要模型（未做），附关键输出摘录。不成立的，写明 PLAN.md §15 表格里的后备方案会影响哪些章节。全部汇总在 `experiments/1a/REPORT.md`。
+5. 可复现：Claude 在自己的环境里重跑每个 `run.mjs`，结论一致才标【已验证】。
+6. 无本机信息：代码和报告里不出现用户名、个人路径、本地网关，端口只能出现 dsh 默认值；路径用 `$DSH_HOME`、`<dsh包目录>` 等占位。按 [RUNBOOK.md](RUNBOOK.md)“提交前检查本机信息”扫描无命中。
+7. 执行端不提交、不推送，不改 PLAN.md、AGENTS.md 和 `docs/context/`。PLAN.md 的回填由 Claude 起草、用户确认后再改。
+8. 清理：实验结束后，自己启动的进程都已退出，临时目录都已删除。
+
+第 1a、1b 阶段的产品验收：见 PLAN.md §15“验收”表（T1–T26）。
 
 ## 进展
 
-- 2026-10-23 设计定稿（PLAN.md 头部）。尚未开始实现。
-- 2026-10-23 建立基础文档：AGENTS.md、PROJECT_INDEX.md、README.md 和 `docs/context/` 下各文件，未改动 PLAN.md。
-  - 验收标准：各文件职责清楚且开头有职责说明；AGENTS.md“通用规则”与模板逐节一致；无重复的权威来源；AGENTS.md 约 150 行以内、NOW.md 约 100 行以内；新增相对链接都能指到文件。
-  - 结果：【已验证】2026-10-23，方法为行数统计、模板逐行比对、链接存在性检查（见 [RUNBOOK.md](RUNBOOK.md)“文档维护”）。用户验收：尚未进行。
-- 2026-10-23 按用户要求新建根目录 `CLAUDE.md`，全文只有导入行 `@AGENTS.md`（按用户指令不写职责说明行）。导入路径能指到 AGENTS.md；用 `claude -p` 实测新会话能加载 AGENTS.md，【已验证】2026-10-23（[RISKS.md](RISKS.md) R4，步骤见 [RUNBOOK.md](RUNBOOK.md)）。
-
-- 2026-10-23 第 0 阶段由 dsh 实现，Claude 按上面 8 条验收：
-  - 通过（第 1–4、6、8 条）：【已验证】2026-10-23。方法：查看全部新文件；`git config --local --list`、`git check-attr`；把工作区复制到 tmpfs 临时目录新建仓库，跑 `npm test`（3/3 通过）和 `npm run build`（退出 0、不产出文件）；原仓库里 `node --test` 也是 3/3；grep 检查无写死路径或端口；从 dsh 会话日志核对执行过的全部命令，没有 commit、push、kill，也没碰 `~/.dsh`。只在 Linux、Node 22 上跑过。
-  - 第 5 条：`ci.yml` 能被 PyYAML 解析，矩阵为三平台 × `[20, 'lts/*']`，不跑 `npm install`。2026-10-23 推送 `05ecf90` 触发 CI 运行 39933515389，6 个 job（ubuntu、windows、macos × Node 20、lts/*）全部 success，【已验证】（GitHub API 查询 job 结论）。job 日志须登录才能看（API 匿名访问返回 403）。风险最大的 windows × Node 20 由用户提供日志截图核对：`# tests 3`、`# pass 3`、`# fail 0`，三个测试名与本地一致，【已验证】2026-10-23。其余 5 个 job 只核对了结论为 success，测试数量和 `lts/*` 解析成的版本【未验证】。另有警告：`actions/checkout@v4`、`actions/setup-node@v4` 面向 Node 20，已被强制改用 Node 24 运行，不影响结果。
-  - 第 7 条：初验不通过，`docs/dev-setup.md` 把只在 Node 22 上跑过的结果写成“在 Node.js ≥ 20 上通过”。按用户要求由 Claude 改为“Linux、Node.js 22 上通过；Node 20 及 Windows、macOS 由 CI 验证【未验证】”。复验通过，【已验证】2026-10-23：首行有职责说明，前置条件、测试和构建命令齐全，1a 小节写“暂无”，文中命令实跑 3/3 通过、build 退出 0，无 CR。
-  - 偏离：dsh 会话执行任务时权限是 `danger-full-access`、审批 `never`，任务结束后才切到 `workspace-write`（会话日志 `permission/preset` 事件）。这次没有越界操作，但 R6 依赖的沙箱保护并未生效（[RISKS.md](RISKS.md) R6）。
-
-- 2026-10-23 按用户要求抹除仓库里的本机信息（[DECISIONS.md](DECISIONS.md)“项目决策”），涉及 PLAN.md 附录 A.1、A.2 末条、附录 B 第 1 条，以及 AGENTS.md、NOW.md、RISKS.md、RUNBOOK.md、dev-setup.md。PLAN.md 由本会话按用户指令修改，只做泛化，不改设计内容。【已验证】2026-10-23：对全部待提交文件 grep 用户名、个人路径、网关、端口、分区、邮箱、会话 ID，除 PLAN.md §4.3 泛泛列举的“nvm”外无命中。
-- 2026-10-23 PLAN.md 曾按用户要求移出仓库、改用本地独立仓库管理；同日用户改为随仓库公开，已加回主仓库并删除本地独立仓库（[DECISIONS.md](DECISIONS.md)“已被替代的决策”）。公开前复查 PLAN.md：只有产品通用路径、公开项目链接和回环地址，无本机信息。
+- 2026-10-23 建立基础文档和根目录 `CLAUDE.md`（只含导入行 `@AGENTS.md`）。【已验证】2026-10-23：文档检查见 [RUNBOOK.md](RUNBOOK.md)“文档维护”，`claude -p` 实测新会话能加载 AGENTS.md（[RISKS.md](RISKS.md) R4）。用户验收：尚未进行。
+- 2026-10-23 第 0 阶段完成：dsh 实现、Claude 验收，8 条全部通过，三平台 CI 通过；已推送到 `origin/main`（[history/2026-10-23-phase0.md](history/2026-10-23-phase0.md)）。用户验收：尚未进行。
+- 2026-10-23 仓库清理了本机信息；PLAN.md 随仓库公开（[DECISIONS.md](DECISIONS.md)）。
+- 2026-10-23 第 1 批技术验证由 dsh 完成（结论见 [REPORT.md](../../experiments/1a/REPORT.md)），Claude 按上面 8 条验收，**全部通过**，【已验证】2026-10-23：
+  - 结论：02、03、12 成立；01 不成立（只能整份复制 standard）；06、07、18 部分成立。对 PLAN.md 的影响见 REPORT.md 末节，待用户确认后回填。
+  - 第 5 条：Claude 用与 dsh 沙箱相同的 bwrap 参数逐个重跑 7 个 `run.mjs`，RESULT 行与报告一致；并对照 dsh 源码抽查了 02（预设文件）、06（`DSH_` 前缀校验）、18（PATH 上的 pnpm）。
+  - 第 3 条：dsh 会话在任务开始前切到 `workspace-write`；第 0 步实测沙箱 PID 隔离生效（PID 1 为 `bwrap --unshare-pid`）；用户 dsh Web 的 PID、`~/.dsh` 下 profile 列表和配置哈希与派任务前的基线一致。
+  - 第 2、6、8 条：`npm test` 3/3；本机信息扫描无命中（`127.0.0.1:9` 是故意不可达的地址）；宿主机上无遗留进程、临时目录和锁目录。
+  - 第 7 条：dsh 未提交；应用户第二轮指令改了 NOW.md 三处，属用户授权。
+  - 发现：harness 没有重定向 `XDG_RUNTIME_DIR`，在只读的 `/run/user/<uid>` 下 pnpm 失败；在不加沙箱的宿主机上会往临时目录外写锁目录。已补进 R6 第 4 条；Claude 按用户要求修了 harness，在 `/run/user` 只读的 bwrap 里重跑 7 项全部通过、结论不变，【已验证】2026-10-23。
+- 2026-10-23 第 1 批结论经用户审阅 diff 后回填 PLAN.md（§5.4、§5.6、§9.2、§9.4、§9.5、§10、§11.4、§11.5、§14.5、§15、§16、§17 等）；01 采用整份复制 `standard`（[DECISIONS.md](DECISIONS.md)）。
 
 ## 阻塞与待核实
 
 - 【待核实】`package.json` 写了 `"license": "MIT"`，但 LICENSE 文件还没建；版权人署名需用户提供（PLAN.md §7.1、§18）。
 - 【待核实】PLAN.md §3 中 D1–D19 的确认人（见 [DECISIONS.md](DECISIONS.md)）。
 - 【待核实】本次文档结构（MAP 并入 PROJECT_INDEX.md，RISKS 和 DECISIONS 独立）是 AI 采用的方案，待用户认可。
+- 【待核实】第 2 批要用的模型配置：被测 dsh 在临时 `DSH_HOME` 里没有服务商配置，跑一轮对话需要模型；不能复制用户 `~/.dsh` 里的凭据。
 
 ## 下一步
 
-1. 第 0 阶段 8 条全部通过；用户验收：尚未进行。
-2. 远程仓库：用户 2026-10-23 新建 `https://github.com/skeiu/agent-collab.git`。【已验证】2026-10-23：匿名 `git ls-remote` 成功、没有任何引用，即公开的空仓库。推送用的认证还没配置。
-3. 已推送：`442c9c7`、`05ecf90` 于 2026-10-23 经用户授权推送到 `origin/main`（SSH），本地 `main` 跟踪 `origin/main`。以后每次推送仍须用户授权。
-4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
-5. 第 1a 阶段先做技术验证，结论回填 PLAN.md（§15“进入 1b 的条件”）；开工前把 R6 的隔离要求写进任务书；dsh 会话要在发任务书**之前**切到 `workspace-write`，并先确认沙箱是否真的隔离了宿主进程。
+1. Claude 做 §17 第 8、16、17 项的验证。
+2. 用户决定第 2 批的模型配置；第 2 批和 Claude 侧都完成并回填后，才进入 1a 实现。
+3. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
+4. 每次推送仍须用户授权。
 
 ## 证据入口
 
-- 阶段计划与验收标准：PLAN.md §15
+- 阶段计划与验收标准：PLAN.md §15；待确认点：PLAN.md §17
 - 开发机实测记录：PLAN.md 附录 A
+- 第 1 批实验报告：[../../experiments/1a/REPORT.md](../../experiments/1a/REPORT.md)
 - 文档检查方法：[RUNBOOK.md](RUNBOOK.md)
+- 归档：[history/README.md](history/README.md)

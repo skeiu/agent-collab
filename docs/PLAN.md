@@ -1,6 +1,6 @@
 # agent-collab 方案
 
-> 状态：设计已定稿，尚未实现。
+> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文。
 > 来源：2026-10-23 的设计讨论。同日复查时对照 dsh 源码更正了两处事实（权限预设、提问工具），并补充了 D20–D23 和相关细节（D20–D23 已经用户确认）。
 > 本文描述的是**通用产品**的设计，不针对某一台机器。所有和环境有关的信息（工具装在哪、用哪家模型服务商、端口、磁盘类型等）都靠运行时探测和配置获得。
 > 关于 dsh 行为的事实，依据是 dsh 0.2.1-rc.2 的源码、文档和一台 Linux 开发机上的实测（实测记录见附录 A）。实现时如果发现 dsh 新版本的行为不同，以实际情况为准，并回头更新本文。
@@ -154,9 +154,9 @@
 | `agents` | `create({ sessionId, meta: { cwd, agentPreset? }, agentOptions, setup })`、`resume({ resumeSessionId, agentOptions, setup })`、`get(id)` |
 | agent | `followup(createUserMessage(...))` 发消息，`whenIdle()` 等空闲，`cancel({ kind: 'user' })` 取消，`status`，`session.seq` / `session.eventAt(seq)` |
 | 事件 | `ctx.on('session/event', (session, event) => …)`，事件类型有 `turn/start`、`user/message`、`assistant/message`、`assistant/chunk`、`tool/call`、`tool/result`、`turn/end`；`ctx.on('agent/assistant-stream', …)` 推送逐字的思考内容；`ctx.on('agent/error', …)` |
-| `agentPresets` | `mount(agentCtx, id)`。**dsh Web 禁用了全局工具，bash、读写文件等都挂在工具预设后面，不挂预设的会话一个工具都没有。** 内置预设有 `standard`、`code`、`minimal`、`cordis`。新增工具预设的方式，是在 bundle 补丁里插入一行 `@deepseek-ai/dsh-agent-preset` |
+| `agentPresets` | `mount(agentCtx, id)`。**dsh Web 禁用了全局工具，bash、读写文件等都挂在工具预设后面，不挂预设的会话一个工具都没有。** 内置预设有 `standard`、`ptc`、`minimal`、`cordis`（实测）。`mount` 是异步方法，返回 `{ id }`。**`agents.create` 不会自动挂预设**（dsh Web 自己的会话控制器是在 setup 里调用 `mount`），桥接必须在 setup 里显式调用。新增工具预设的方式，是在 bundle 补丁里插入一行 `@deepseek-ai/dsh-agent-preset`，写出完整的插件列表（没有继承或派生语法，见 9.5） |
 | `permissionPresets` | `set(session, name)`：按预设名同时设沙箱和审批，名字不在预设表里会报错。要设表里没有的组合（比如只读），直接用 `dsh-sandbox-policy` 的 `setSandboxMode(session, mode)` 和审批服务的 `setApprovalPolicy(session, policy)` |
-| `workspaceRegistry` | `create(path, title)` 返回工作区，再调 `attachSession(sessionId)`，会话就挂到 dsh Web 侧栏对应工作区下。只有 web 组合包里有这个服务，要用 `ctx.get('workspaceRegistry')` 按需获取，不能写进 `inject`，否则在其他 profile 里插件会起不来 |
+| `workspaceRegistry` | `create(path, title)` 返回工作区；同一路径重复调用会复用已有工作区（id 不变，title 沿用第一次的），不会报错。再调工作区对象的 `attachSession(sessionId)`（方法在工作区上，不在 registry 上），会话就挂到 dsh Web 侧栏对应工作区下。只有 web 组合包里有这个服务，要用 `ctx.get('workspaceRegistry')` 按需获取，不能写进 `inject`，否则在其他 profile 里插件会起不来 |
 | `agentDefaultModel` | `currentSelection()` 返回 `{ provider, model, reasoningEffort? }` |
 | `sessions` | `flush(session)` |
 | `subagents` | `waitForChildren(agent)` |
@@ -175,7 +175,8 @@
 - 安装命令：`dsh plugin --profile <profile> add <spec>`，依赖 pnpm。spec 可以是本地路径、tarball 或注册表包名。**我们统一用 `npm pack` 打出的 `.tgz` 来装**：安装包会被复制进 profile，不依赖源码目录在哪。
 - profile 的组合包列表在 `$DSH_HOME/profiles/<profile>/package.json` 的 `dsh.profile.bundles` 里。
 - dsh 桌面版（Electron）使用保留名 `desktop` 的 profile，CLI 不能管理它。第 1 阶段只支持通过 CLI 启动的 dsh Web；桌面版的支持放到后面再看。
-- base 组合包启用了热重载（HMR），headless 关闭了它。装或更新插件后是否需要重启 dsh Web，**待确认**。
+- base 组合包启用了热重载（HMR），headless 关闭了它。实测：dsh Web 运行中**新装**一个插件包会热加载生效；用 `dsh plugin add` **更新已装的同一个包**不会重新加载，必须重启 dsh Web。
+- `dsh plugin` 只调用 PATH 上的 `pnpm`，找不到时退出码 127，不会自己用 corepack。用 corepack 第一次取得 pnpm 时要联网下载；pnpm 就绪后，安装没有依赖的 `.tgz` 可以离线完成（registry 不可达加 `--offline` 实测通过）。
 
 ### 5.7 dsh 的模型配置在哪
 
@@ -318,7 +319,7 @@ agent-collab/
 
 下面的"设计端"在第 1 阶段就是 Claude。
 
-skill 设置 `disable-model-invocation: true`，只有用户手动输入才会触发。另外，派发时会给执行端加上 `AGENT_COLLAB_ROLE=executor`（见 11.4），防止执行端再往外派任务。skill 的 frontmatter 还用 `allowed-tools` 放行 `collab` 命令，免得每一步都弹权限确认（能否这样用待确认，第 17 节第 16 项）。
+skill 设置 `disable-model-invocation: true`，只有用户手动输入才会触发。另外，派发时会给执行端加上防套娃标记（`AGENT_COLLAB_ROLE=executor`，dsh 执行端为 `DSH_AGENT_COLLAB_ROLE=executor`，见 11.4），防止执行端再往外派任务。skill 的 frontmatter 还用 `allowed-tools` 放行 `collab` 命令，免得每一步都弹权限确认（能否这样用待确认，第 17 节第 16 项）。
 
 ### 阶段 0：预检
 
@@ -420,7 +421,7 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 | ACP 方法 | 桥接的行为 |
 |---|---|
 | `initialize` | 校验令牌和协议版本（D22），返回能力：支持 `session/resume`、`session/close`；图片能力按当前模型实际情况声明 |
-| `session/new` | 参数是 `cwd` 加 `_meta.agentCollab`（`title`、`agentPreset`（默认见 9.5）、`permissionPreset`、`model`、`reasoningEffort`、`attachWorkspace` 默认 true、`env`）。依次执行：`agents.create`；在 setup 里挂工具预设并装好模型选择；按 11.9 设好沙箱和审批；`workspaceRegistry.create(cwd).attachSession` |
+| `session/new` | 参数是 `cwd` 加 `_meta.agentCollab`（`title`、`agentPreset`（默认见 9.5）、`permissionPreset`、`model`、`reasoningEffort`、`attachWorkspace` 默认 true、`env`）。`env` 的键必须以 `DSH_` 开头（见 11.4）。依次执行：`agents.create`；在 setup 里显式 `agentPresets.mount` 挂工具预设、用 `shellEnv.register` 注入 `env`、装好模型选择；按 11.9 设好沙箱和审批；`workspaceRegistry.create(cwd).attachSession` |
 | `session/resume` | 会话还活着就直接用 `agents.get`，否则在本进程里 `agents.resume`。不存在抢锁问题。带 `_meta.agentCollab.sinceSeq` 时，先按序号补发断开期间的事件（`session.eventAt`），保证事件不丢 |
 | `session/prompt` | 用 `agent.followup` 发消息，等根会话和所有子任务都完成后返回 `stopReason` |
 | `session/cancel` | `agent.cancel({ kind: 'user' })` |
@@ -447,7 +448,7 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 - 所有 dsh 内部服务调用都集中在 `dsh-bridge/lib/dsh-api.js`，dsh 升级后只需要改这一个文件。
 - `package.json` 声明支持的 dsh 版本范围，加载时遇到不支持的版本，在 dsh 日志和发现文件里写明原因。
-- 桥接包除了 dsh 自己提供的服务，不依赖任何需要联网下载的包：ACP SDK 用 `bundledDependencies` 打进 `.tgz`，或者改用自写的精简实现（1a 定）。这样安装时不用为我们的包联网。pnpm 本身装插件时会不会联网，待确认（第 17 节第 18 项）。
+- 桥接包除了 dsh 自己提供的服务，不依赖任何需要联网下载的包：ACP SDK 用 `bundledDependencies` 打进 `.tgz`，或者改用自写的精简实现（1a 定）。这样安装时不用为我们的包联网。实测：pnpm 就绪后安装无依赖的 `.tgz` 不需要联网；但用 corepack 第一次取得 pnpm 时要联网（5.6）。离线机器需要预先装好 pnpm，或预置 corepack 缓存，用户文档要写明。
 - `doctor.mjs --deep` 跑一个最小冒烟：建会话 → 发一句话 → 收到事件 → 正常结束 → 关闭会话。
 - 发布前，在支持范围内的每个 dsh 版本上跑一遍桥接的集成测试。
 
@@ -455,8 +456,10 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 dsh 的提问工具叫 `ask_user_question`（`dsh-tool-ask-user`），作为一行插件（`tool-ask-user`）挂在工具预设里，Web 的 `standard` 预设里就有它。它和 D11 冲突：执行端应该汇报 `blocked`，而不是直接问人。
 
-- **首选**：桥接的 bundle 补丁里加一个工具预设 `agent-collab`，内容是 `standard` 去掉 `tool-ask-user`，桥接建会话时默认用它。**要确认**能否基于 `standard` 派生，而不是整份复制它的插件列表；复制的话，dsh 升级后两边会不一致。
-- **做不到时**：用用户选的预设（`dsh.agentPreset`，默认 `standard`），靠任务书约束。执行端仍然提问时，桥接发出 `question_pending`，问题由人在 dsh Web 里回答，设计端在进度里看到提示。
+- **采用**：桥接的 bundle 补丁里加一个工具预设 `agent-collab`，内容是**整份复制** `standard` 的插件列表、去掉 `tool-ask-user`，桥接建会话时默认用它。实测 dsh 没有基于已有预设派生的语法（`dsh-agent-preset` 没有继承字段，补丁也改不到 `standard` 内部的行），整份复制可以正常工作（用户 2026-10-23 确认采用）。
+  - 代价：dsh 升级改了 `standard` 时，复制品会落后。由 `doctor` 比对 `agent-collab` 和当前 dsh 自带的 `standard`（去掉 `tool-ask-user` 后）是否一致，不一致就提示，桥接发新版本时同步更新这份列表。
+  - 复制品不可用（比如引用了新版 dsh 已删除的插件）时，退回下一条。
+- **退回做法**：用用户选的预设（`dsh.agentPreset`，默认 `standard`），靠任务书约束。执行端仍然提问时，桥接发出 `question_pending`，问题由人在 dsh Web 里回答，设计端在进度里看到提示。
 - **acp 退回模式**：如果没有应答者，阻塞式提问会直接返回错误，执行端再按任务书汇报 `blocked`。
 
 ## 10. 环境自检（`doctor`）
@@ -469,7 +472,7 @@ dsh 的提问工具叫 `ask_user_question`（`dsh-tool-ask-user`），作为一�
 | 共享运行时 | 是否安装、版本是否和插件一致、文件是否完整；所在位置是否支持权限控制 |
 | 安装记录 | `installed.json` 记录的部件和实际情况是否一致 |
 | 执行端 | 每个执行端 CLI 的位置和版本；**实际会用的端点和模型**（读各工具自己的配置）；是否支持图片；沙箱模式下哪些目录只读、有没有网络 |
-| dsh | 安装目录、`DSH_HOME`、dsh Web 用的 profile、Web 是否在运行、桥接是否在线、桥接和 dsh 版本是否兼容、`agent-collab` 工具预设是否可用 |
+| dsh | 安装目录、`DSH_HOME`、dsh Web 用的 profile、Web 是否在运行、桥接是否在线、桥接和 dsh 版本是否兼容、`agent-collab` 工具预设是否可用，以及它和 dsh 自带的 `standard`（去掉 `tool-ask-user`）是否一致（9.5） |
 | pnpm | 只在需要安装 dsh 桥接时检查 pnpm 和 corepack |
 | 角色组合 | 默认执行端是否可用；同一个工具担任两端时给出提示 |
 
@@ -525,10 +528,11 @@ events                           → 统一格式的异步事件流：
 
 ### 11.4 防止套娃
 
-- 派发时给执行端的进程和会话加上环境变量 `AGENT_COLLAB_ROLE=executor`：
-  - codex 和 claude 是子进程，直接设置进程环境变量即可。
-  - dsh 走桥接时，通过 `session/new` 的 `_meta.agentCollab.env` 注入该会话的 shell 环境。**能否注入待确认**；不能的话就在任务书里明确禁止，而且 `executors.dsh.env` 在桥接模式下也不生效（`doctor` 会提示）。
-- 检测到这个变量时，`collab run start` 拒绝执行。
+- 派发时给执行端的进程和会话加上防套娃标记：
+  - codex 和 claude 是子进程，直接设置进程环境变量 `AGENT_COLLAB_ROLE=executor`。
+  - dsh 走桥接时，通过 `session/new` 的 `_meta.agentCollab.env` 注入该会话的 shell 环境。实测：桥接在会话的 setup 里用 `shellEnv.register` 注册，只影响这一个会话；但 dsh 要求键名以 `DSH_` 开头，所以 dsh 执行端用 **`DSH_AGENT_COLLAB_ROLE=executor`**。同理，`executors.dsh.env` 在桥接模式下只能传 `DSH_` 开头的变量，其他键 `doctor` 会提示无效。
+  - acp 退回模式下 dsh 是子进程，两个变量都设上。
+- 检测到 `AGENT_COLLAB_ROLE` 或 `DSH_AGENT_COLLAB_ROLE` 为 `executor` 时，`collab run start` 拒绝执行。
 - skill 继续保持 `disable-model-invocation: true`。
 
 ### 11.5 dsh 适配器的连接顺序
@@ -538,7 +542,7 @@ events                           → 统一格式的异步事件流：
    - dsh Web 已经开着但没装桥接插件：提示运行 `/collab-setup`，**不要再启动第二个 dsh Web**。
 3. 桥接不可用（没装、版本不兼容、自检失败）：退回 `dsh --profile acp`（ACP stdio），用同一套客户端代码。同时提醒用户：这个会话不会实时显示，任务结束前不要在 dsh Web 里打开它，否则会占锁。
    - 这种模式下没人能批准，审批请求按配置处理，默认拒绝。
-   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。配置里明确指定了模型时，以配置为准。
+   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。实测可行：覆盖层能正常加载，ACP `session/new` 返回的当前模型就是覆盖层指定的模型；实现时要用可靠的 YAML 解析挑条目，不能靠简单的按行匹配。配置里明确指定了模型时，以配置为准。
    - 注意：第一次运行 `dsh --profile acp` 时，dsh 会按自带模板自动建出 `$DSH_HOME/profiles/acp` 目录。这是 dsh 自己的行为；如果这个目录是因为我们才出现的，就记入 `installed.json`，卸载时询问是否一并删除。
 - 启动 dsh：从 PATH 上的 `dsh` 解析出它的入口 `.js` 文件，再用 `process.execPath` 运行，绕开 Windows 上 npm 生成的 `.cmd` 包装，也不依赖 dsh 装在哪个 Node 版本管理器下。
 
@@ -753,7 +757,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 做什么：
 
 1. 插件里的运行时版本和 `installed.json` 不一致：复制新运行时、更新 `current.json`。
-2. 桥接版本不一致：重新安装 `.tgz`。dsh Web 正在跑时，如果热重载不能生效，就提示重启。
+2. 桥接版本不一致：重新安装 `.tgz`。更新已装的桥接不会热重载（5.6），dsh Web 正在跑时要提示用户重启；重启前桥接仍是旧版本，按 D22 处理。
 3. 重新渲染各设计端的 skill。
 4. 配置文件迁移：补上新增配置项的默认值。
 5. 清理：删除超过保留期的运行记录（`runRetentionDays`）；旧运行时只保留上一个版本，并且没有任务在用时才删。
@@ -812,19 +816,21 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 
 **第一步：技术验证。** 下面这几项决定桥接能不能按现在的设计做。每项写一个最小的试验，结论回填本文：
 
-| 待确认点（第 17 节编号） | 如果不成立 |
-|---|---|
-| 1. 能否派生一个去掉 `ask_user_question` 的工具预设 | 只能靠任务书约束，同时转发它的提问 |
-| 2. `agentPresets` 的预设 id 和 `mount` 签名 | 桥接建的会话没有工具，桥接方案要改 |
-| 3. `workspaceRegistry` 遇到已有工作区时的行为 | 会话挂不到侧栏对应的工作区下 |
-| 4. 审批和提问能否从会话事件里观察到 | 看不到"等待审批"，卡死检测只能放宽 |
-| 6. 能否给单个会话的 shell 注入环境变量 | 防套娃只能靠任务书约束；`executors.dsh.env` 在桥接模式下不生效 |
-| 7. 装或更新插件后要不要重启 dsh Web | 影响 1b 的自动同步设计 |
-| 8. Claude Code 插件：命令名前缀、Monitor、skill 怎么引用插件目录 | 影响 skill 的写法和用户要输入的命令 |
-| 12. 生成 acp 覆盖层是否可行 | 退回模式拿不到用户在 dsh 里的模型设置 |
-| 16. skill 的 `allowed-tools` 能否放行 `collab` 命令 | 每一步都要用户点确认，体验差，但不影响功能 |
-| 17. Claude 会话结束后，独立的工作进程能否存活 | D20 要换实现方式 |
-| 18. 安装桥接时 pnpm 是否需要联网 | 影响 1b 的安装设计；离线环境要在文档里写明 |
+| 待确认点（第 17 节编号） | 如果不成立 | 结论（2026-10-23） |
+|---|---|---|
+| 1. 能否派生一个去掉 `ask_user_question` 的工具预设 | 只能靠任务书约束，同时转发它的提问 | 不能派生；改为整份复制 `standard`，可行（9.5） |
+| 2. `agentPresets` 的预设 id 和 `mount` 签名 | 桥接建的会话没有工具，桥接方案要改 | 成立；要显式 `mount`（5.4） |
+| 3. `workspaceRegistry` 遇到已有工作区时的行为 | 会话挂不到侧栏对应的工作区下 | 成立：复用已有工作区（5.4） |
+| 4. 审批和提问能否从会话事件里观察到 | 看不到"等待审批"，卡死检测只能放宽 | 待验证（需要模型） |
+| 6. 能否给单个会话的 shell 注入环境变量 | 防套娃只能靠任务书约束；`executors.dsh.env` 在桥接模式下不生效 | 部分成立：只能用 `DSH_` 开头的变量（11.4） |
+| 7. 装或更新插件后要不要重启 dsh Web | 影响 1b 的自动同步设计 | 部分成立：新装可热加载，更新要重启（5.6、14.5） |
+| 8. Claude Code 插件：命令名前缀、Monitor、skill 怎么引用插件目录 | 影响 skill 的写法和用户要输入的命令 | 待验证 |
+| 12. 生成 acp 覆盖层是否可行 | 退回模式拿不到用户在 dsh 里的模型设置 | 成立（11.5） |
+| 16. skill 的 `allowed-tools` 能否放行 `collab` 命令 | 每一步都要用户点确认，体验差，但不影响功能 | 待验证 |
+| 17. Claude 会话结束后，独立的工作进程能否存活 | D20 要换实现方式 | 待验证 |
+| 18. 安装桥接时 pnpm 是否需要联网 | 影响 1b 的安装设计；离线环境要在文档里写明 | 部分成立：首次取得 pnpm 要联网，之后可离线（5.6、9.4） |
+
+实验代码和报告在 `experiments/1a/`，每项一条命令可重跑。
 
 **范围：**
 
@@ -877,7 +883,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 | T14 | 1b | **首次安装**：装好插件后，`/collab-setup` 列出检测结果和安装计划；确认一次后，运行时、pnpm、桥接全部装好；`installed.json` 记录正确；`doctor` 全部通过 |
 | T15 | 1b | **自动同步**：提升插件版本后新开 Claude 会话，运行时和桥接自动更新，不需要再次确认；模拟新增一种部件类型时，会停下来请求确认 |
 | T16 | 1b | **卸载**：`--uninstall` 后，dsh profile 和各目录都恢复原样，用户和其他工具写入的条目原样保留 |
-| T17 | 1a | **防套娃**：在执行端环境（`AGENT_COLLAB_ROLE=executor`）里调用 `collab run start` 会被拒绝 |
+| T17 | 1a | **防套娃**：在执行端环境（`AGENT_COLLAB_ROLE=executor`，dsh 执行端为 `DSH_AGENT_COLLAB_ROLE=executor`）里调用 `collab run start` 会被拒绝 |
 | T18 | 1b | **换服务商**：把 dsh Web 的模型换成另一家服务商后，桥接和退回模式都改用新设置，agent-collab 不需要任何改动；`doctor` 显示的端点和模型随之变化 |
 | T19 | 1b | **环境差异**：在"没装 dsh""dsh 装在不同的 Node 版本管理器下""dsh Web 用非默认 profile""没装 pnpm"几种环境下，`/collab-setup` 都能正确检测并给出对应计划（可以用容器或临时的 PATH、`DSH_HOME` 模拟） |
 | T20 | 1b | **设计端的两种形态**：Claude Code 终端版和 Desktop 的 Code 标签页都能完成 T13 和 T14 |
@@ -927,17 +933,17 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 | 设计端会话关闭或重启，正在跑的任务被连带结束 | 任务由独立的工作进程负责（D20），新会话可以接上 |
 | 运行记录里有命令输出等敏感内容，而且越积越多 | 目录只让本人读写；按 `runRetentionDays` 清理 |
 | 运行时和桥接的版本不一致 | 协议版本协商（D22）；不兼容时退回 acp 并提示 |
-| dsh 升级改了内置工具预设，我们派生的 `agent-collab` 预设跟不上 | 尽量基于 `standard` 派生而不是复制；`doctor` 检查预设是否可用，不可用时改用 `standard` 加任务书约束 |
+| dsh 升级改了内置工具预设，我们复制的 `agent-collab` 预设跟不上（dsh 不支持派生，只能复制，见 9.5） | `doctor` 比对它和 dsh 自带的 `standard`（去掉 `tool-ask-user`）是否一致，不一致就提示；桥接发版时同步列表；预设不可用时改用 `standard` 加任务书约束 |
 
 ## 17. 实现时需要先确认的点
 
-1. 能否在桥接的 bundle 补丁里基于 `standard` 派生一个去掉 `ask_user_question` 的工具预设（9.5）。
-2. `agentPresets` 的预设 id 和 `mount` 的签名，在支持的 dsh 版本中是否和 ccteam 代码注释描述的一致。
-3. `workspaceRegistry.create` 遇到已存在的工作区时，是复用还是报错。
+1. 能否在桥接的 bundle 补丁里基于 `standard` 派生一个去掉 `ask_user_question` 的工具预设（9.5）。**已验证：不能派生，改为整份复制。**
+2. `agentPresets` 的预设 id 和 `mount` 的签名，在支持的 dsh 版本中是否和 ccteam 代码注释描述的一致。**已验证（5.4）。**
+3. `workspaceRegistry.create` 遇到已存在的工作区时，是复用还是报错。**已验证：复用。**
 4. 审批和提问在插件里怎么观察。文档显示审批会在会话日志里写 `approval/asked`、`approval/decided`，提问是 `ask_user_question` 的工具调用；要实测能否通过 `session/event` 收到（9.3）。
 5. 怎么可靠地检测某个执行端当前的服务商或网关是否支持图片（T11）。
-6. 桥接能否给单个 dsh 会话的 shell 注入环境变量（11.4 防套娃）。
-7. 装或更新插件后，热重载能否生效，还是必须重启 dsh Web（5.6、14.5）。
+6. 桥接能否给单个 dsh 会话的 shell 注入环境变量（11.4 防套娃）。**已验证：可以，但键名必须以 `DSH_` 开头。**
+7. 装或更新插件后，热重载能否生效，还是必须重启 dsh Web（5.6、14.5）。**已验证：新装生效，更新要重启。**
 8. Claude Code 插件：
    - skill 内容里能否引用插件根目录（比如 `${CLAUDE_PLUGIN_ROOT}`），还是要靠"skill 所在目录"的相对路径。
    - `SessionStart` hook 在终端和 Desktop 的 Code 标签页里是否都能运行，输出显示在哪里。
@@ -947,13 +953,13 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 9. codex 作为设计端时，用 skill 目录还是 `codex plugin`；codex 的 skill 目录在各平台上的位置（第 3 阶段）。
 10. dsh 作为设计端时，后台任务和 `job_output` 的具体用法（第 3 阶段）。
 11. claude 执行端的具体 CLI 参数：三个权限级别分别怎么对应（11.9）、有没有结构化输出参数（第 13 节）（第 2 阶段）。
-12. 从 dsh Web 所用 profile 的用户配置层挑出服务商条目、生成 acp 覆盖层的做法是否可行：挑哪些条目才完整，这些条目在 acp 组合里能否正常加载（11.5）。
+12. 从 dsh Web 所用 profile 的用户配置层挑出服务商条目、生成 acp 覆盖层的做法是否可行：挑哪些条目才完整，这些条目在 acp 组合里能否正常加载（11.5）。**已验证：可行；只测了一个服务商条目加默认模型的最小组合。**
 13. 桥接能否从 dsh 的服务目录列出可选模型，给配置页用（9.2、12.3）。
 14. 怎么在不消耗太多 token 的前提下，检查 codex、claude 实际会用的端点和模型（11.8）。
 15. dsh 桌面版（Electron 管理的 `desktop` profile）能否、以及怎么安装桥接（5.6）。
 16. Claude Code 插件里的 skill，能否用 frontmatter 的 `allowed-tools` 放行 `collab` 命令（第 8 节）。
 17. Claude 会话结束时（包括在 Desktop 里关掉会话），从 Bash 启动的独立工作进程能否存活；Windows 上用什么方式脱离父进程（D20）。
-18. `dsh plugin add <tgz>` 时 pnpm 是否需要联网，离线机器能否安装（9.4）。
+18. `dsh plugin add <tgz>` 时 pnpm 是否需要联网，离线机器能否安装（9.4）。**已验证：首次取得 pnpm 要联网，之后可离线。**
 19. 桥接能否拿到 dsh Web 的访问地址，生成直达某个会话的链接（9.1）。
 
 ## 18. 参考和许可

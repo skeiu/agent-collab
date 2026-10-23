@@ -16,6 +16,7 @@ agent-collab：让多个编程代理按“设计端 / 执行端”分工协作�
 | 执行操作或验收前查步骤 | [docs/context/RUNBOOK.md](docs/context/RUNBOOK.md) |
 | 查决策的确认状态、被否决的替代方案 | [docs/context/DECISIONS.md](docs/context/DECISIONS.md) |
 | 查项目过程风险、验证缺口 | [docs/context/RISKS.md](docs/context/RISKS.md) |
+| 给执行端的任务书原文 | `docs/context/briefs/`（如 [1a-batch1.md](docs/context/briefs/1a-batch1.md)） |
 | 追溯历史记录 | [docs/context/history/README.md](docs/context/history/README.md) |
 | 定位目录、版本、配置、运行时位置 | 本文件“目录与位置” |
 | 产品设计的任何专题 | 下表“PLAN.md 章节路由” |
@@ -61,10 +62,11 @@ agent-collab/
 ├── .github/workflows/ci.yml   三平台 × Node 20 与 LTS 的测试
 ├── scripts/build.mjs    构建脚本（第 0 阶段为骨架）
 ├── tests/               node --test 测试
+├── experiments/1a/      第 1a 阶段技术验证实验（每项一个 run.mjs，汇总见 REPORT.md；不进 node --test）
 └── docs/
     ├── PLAN.md          设计方案（权威）
     ├── dev-setup.md     开发前置条件、测试和构建命令
-    └── context/         NOW、RUNBOOK、DECISIONS、RISKS、history/
+    └── context/         NOW、RUNBOOK、DECISIONS、RISKS、history/、briefs/（任务书）
 ```
 
 - 产品代码、构建产物、部署位置：暂无（尚未实现）。规划中的仓库结构和安装后的共享运行时目录见 PLAN.md §7，均为规划，未实现。

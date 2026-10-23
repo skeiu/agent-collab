@@ -78,6 +78,16 @@ T=$(mktemp -d) && tar --exclude=.git -cf - . | tar -xf - -C "$T" && cd "$T" && g
 
 判断：测试全部通过，build 退出 0，`git status` 里只有复制过去的未跟踪文件（build 不产出文件）。【已验证】2026-10-23：Linux、Node 22，tmpfs 临时目录，3/3 通过。Node 20 和 Windows、macOS 靠 CI 验证。
 
+### 重跑第 1a 阶段的实验
+
+每个实验一条命令；为与 dsh 沙箱条件一致并多一层保护，用 bwrap 包一层（独立 PID 空间和 `/tmp`，其余只读）：
+
+```bash
+bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent --tmpfs /tmp -- node experiments/1a/02-agent-presets/run.mjs
+```
+
+判断：最后一行 `RESULT:` 与 `experiments/1a/REPORT.md` 一致。18 号实验首次要联网下载 pnpm。【已验证】2026-10-23：7 项全部重跑一致（harness 修好 `XDG_RUNTIME_DIR` 后）。
+
 ### 核对 dsh 会话做了什么
 
 dsh 会话日志在 `$DSH_HOME/sessions/<工作目录编码>/session-<id>/session.v4.jsonl.zstd`，用 `zstd -dc` 解压到临时目录后按事件类型查看：`permission/preset`、`sandbox/mode`、`approval/policy` 是权限变化；`tool/ptc-dispatch-start` 带执行过的命令；最后一条 `assistant/message` 是汇报。【已验证】2026-10-23，dsh 0.2.1-rc.2。
