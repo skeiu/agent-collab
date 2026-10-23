@@ -16,10 +16,12 @@ agent-collab：让多个编程代理按“设计端 / 执行端”分工协作�
 | 执行操作或验收前查步骤；派发 dsh 任务；提交前检查本机信息 | [docs/context/RUNBOOK.md](docs/context/RUNBOOK.md) |
 | 查决策的确认状态、被否决的替代方案 | [docs/context/DECISIONS.md](docs/context/DECISIONS.md) |
 | 查项目过程风险、验证缺口 | [docs/context/RISKS.md](docs/context/RISKS.md) |
+| 1a 实现的分步计划、各步验收标准、实现决定 | [docs/context/1a-impl-plan.md](docs/context/1a-impl-plan.md) |
 | 给执行端的任务书原文 | `docs/context/briefs/`（如 [1a-batch1.md](docs/context/briefs/1a-batch1.md)） |
 | 追溯历史记录 | [docs/context/history/README.md](docs/context/history/README.md) |
 | 定位目录、版本、配置、运行时位置 | 本文件“目录与位置” |
 | 产品设计的任何专题 | 下表“PLAN.md 章节路由” |
+| 部件之间的字段级接口（桥接 ACP 扩展、适配器、统一事件、运行目录文件、CLI 输出） | [docs/protocol.md](docs/protocol.md) |
 
 ## PLAN.md 章节路由
 
@@ -65,6 +67,7 @@ agent-collab/
 ├── experiments/1a/      第 1a 阶段技术验证实验：§17 第 1–4、6–8、12、16–18 项，每项一个目录和 run.mjs，汇总见 REPORT.md；不进 node --test
 └── docs/
     ├── PLAN.md          设计方案（权威）
+    ├── protocol.md      字段级接口契约（S0 草稿）
     ├── dev-setup.md     开发前置条件、测试和构建命令
     └── context/         NOW、RUNBOOK、DECISIONS、RISKS、history/、briefs/（任务书）
 ```

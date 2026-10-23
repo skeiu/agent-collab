@@ -1,6 +1,6 @@
 # agent-collab 方案
 
-> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文；Claude 侧（第 8、16、17 项）和第 2 批（第 4 项）的结论也已回填，1a 的技术验证完成（Desktop 里插件相关的验证并入 T20，Windows 的验证放到第 2 阶段）。
+> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；同日确定了 1a 实现的 7 个决定（自写 ACP、覆盖层的 YAML 解析、接口契约单列为 `docs/protocol.md`、测试用假 LLM 服务、辅助模块、项目级配置的限制等，见 7.1、9.4、11.5、12.2、附录 B）；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文；Claude 侧（第 8、16、17 项）和第 2 批（第 4 项）的结论也已回填，1a 的技术验证完成（Desktop 里插件相关的验证并入 T20，Windows 的验证放到第 2 阶段）。
 > 来源：2026-10-23 的设计讨论。同日复查时对照 dsh 源码更正了两处事实（权限预设、提问工具），并补充了 D20–D23 和相关细节（D20–D23 已经用户确认）。
 > 本文描述的是**通用产品**的设计，不针对某一台机器。所有和环境有关的信息（工具装在哪、用哪家模型服务商、端口、磁盘类型等）都靠运行时探测和配置获得。
 > 关于 dsh 行为的事实，依据是 dsh 0.2.1-rc.2 的源码、文档和一台 Linux 开发机上的实测（实测记录见附录 A）。实现时如果发现 dsh 新版本的行为不同，以实际情况为准，并回头更新本文。
@@ -47,7 +47,7 @@
 |---|---|---|
 | D1 | 形态 | 共享运行时 `~/.agent-collab/` 存放所有实际代码；各工具里只放一层很薄的入口：Claude Code 插件、dsh 桥接插件，以后还有 dsh 和 codex 的 skill |
 | D2 | 流程蓝本 | 参考 [ozankasikci/sol-skill](https://github.com/ozankasikci/sol-skill)（MIT）的流程、任务书模板和汇报格式，执行端换成可插拔的适配器 |
-| D3 | 脚本语言 | Node.js（≥ 20）。不需要 `npm install`：只用内置模块，少量第三方代码（目前只有可选的 ACP SDK）随仓库附带。Windows 上没有原生 bash，Python 也不一定有；dsh 本身就依赖 Node。Node 不在时，安装流程会说明怎么装 |
+| D3 | 脚本语言 | Node.js（≥ 20）。不需要 `npm install`：只用内置模块；确实需要第三方代码时随仓库附带（目前没有：ACP 是自写的精简实现，见 9.4）。Windows 上没有原生 bash，Python 也不一定有；dsh 本身就依赖 Node。Node 不在时，安装流程会说明怎么装 |
 | D4 | dsh 的实时查看 | 写 dsh 桥接插件，任务在 dsh Web 进程里跑，会话原生显示在 dsh Web 侧栏对应工作区下 |
 | D5 | 桥接协议 | **ACP 兼容**（Agent Client Protocol v1），DSH 特有信息走 ACP 的 `_meta` 字段和带下划线前缀的扩展方法 |
 | D6 | 权限 | 可配置。默认"只能写工作区 + 越权操作由人批准"。只有 dsh 走桥接时有人能批准（在 dsh Web 里）；其他情况都是无人值守，默认拒绝（见 11.9） |
@@ -174,7 +174,7 @@
 - `cordis.patch.yml` 的写法是 `- insert: [{ id: <id>, name: <包名> }]`。
 - 安装命令：`dsh plugin --profile <profile> add <spec>`，依赖 pnpm。spec 可以是本地路径、tarball 或注册表包名。**我们统一用 `npm pack` 打出的 `.tgz` 来装**：安装包会被复制进 profile，不依赖源码目录在哪。
 - profile 的组合包列表在 `$DSH_HOME/profiles/<profile>/package.json` 的 `dsh.profile.bundles` 里。
-- dsh 桌面版（Electron）使用保留名 `desktop` 的 profile，CLI 不能管理它。第 1 阶段只支持通过 CLI 启动的 dsh Web；桌面版的支持放到后面再看。
+- dsh 桌面版（Electron）使用保留名 `desktop` 的 profile，npm 装的 CLI 不能管理它（报 `profile "desktop" is managed exclusively by the Electron application`）。但 dsh 0.2.1-rc.2 的源码和 README 显示：桌面版自带的命令入口会打开 `runCli()` 的 `manageDesktopProfile` 选项，可以在桌面版完全退出、profile 已初始化时执行 `dsh plugin --profile desktop …`；profile 目录同样是 `<DSH_HOME>/profiles/desktop`。【待核实】桌面版本身未实测，Windows 探针见第 17 节第 15 项。第 1 阶段只支持通过 CLI 启动的 dsh Web；桌面版的支持放到后面再看。
 - base 组合包启用了热重载（HMR），headless 关闭了它。实测：dsh Web 运行中**新装**一个插件包会热加载生效；用 `dsh plugin add` **更新已装的同一个包**不会重新加载，必须重启 dsh Web。
 - `dsh plugin` 只调用 PATH 上的 `pnpm`，找不到时退出码 127，不会自己用 corepack。用 corepack 第一次取得 pnpm 时要联网下载；pnpm 就绪后，安装没有依赖的 `.tgz` 可以离线完成（registry 不可达加 `--offline` 实测通过）。
 
@@ -269,15 +269,17 @@ agent-collab/
 │   ├── config.mjs                 三级配置的读取、合并、校验、写入，以及版本迁移
 │   ├── server.mjs                 本地服务：配置页 + 看板
 │   ├── render-skill.mjs           按设计端和语言渲染 SKILL.md
-│   ├── acp-client.mjs             ACP 客户端（基于随仓库附带的 ACP SDK，或自写的精简版）
+│   ├── acp-client.mjs             ACP 客户端（自写的精简版，见 9.4）
+│   ├── jsonrpc.mjs                换行分隔的 JSON-RPC 2.0，acp-client 用
+│   ├── schema-check.mjs           零依赖的精简 JSON Schema 校验器，配置和汇报共用
+│   ├── report.mjs                 从最后一条回复里提取汇报并校验（第 13 节）
 │   ├── adapters/
 │   │   ├── dsh.mjs                优先走桥接，Web 没开时自动启动，失败时退回 acp stdio
 │   │   ├── codex.mjs              第 2 阶段
 │   │   └── claude.mjs             第 2 阶段
-│   └── vendor/                    第三方代码及其许可证（如 @agentclientprotocol/sdk）
+│   └── vendor/                    第三方代码及其许可证（目前没有，需要时才建）
 ├── config/
-│   ├── config.schema.json         所有配置项的唯一描述
-│   └── defaults.json
+│   └── config.schema.json         所有配置项的唯一描述；默认值只写在这里，不另建 defaults.json
 ├── ui/
 │   ├── config.html                从 schema 自动生成的配置表单
 │   └── dashboard.html             任务看板
@@ -289,13 +291,14 @@ agent-collab/
 │       ├── acp-server.js          ACP 方法实现
 │       └── dsh-api.js             所有 dsh 内部服务调用都集中在这一个文件
 ├── scripts/build.mjs              生成 skills/collab/SKILL.md、打包桥接 .tgz、组装运行时
-├── tests/                         单元测试（用假的 dsh 和执行端）+ 集成测试脚本
+├── tests/                         单元测试（用假的 dsh 和执行端，node --test 运行）；fixtures/ 放假对端；integration/ 放要真 dsh 的集成测试脚本，单独运行
 ├── docs/
 │   ├── PLAN.md                    本文件
+│   ├── protocol.md                字段级接口契约：桥接扩展字段、统一事件、运行目录文件、CLI 输出
 │   ├── dev-setup.md               开发模式和 1a 阶段的手动安装步骤
 │   └── user/                      用户文档（安装、配置、各平台注意事项）
 ├── LICENSE                        MIT
-└── NOTICE                         sol-skill（MIT）、ACP SDK（Apache-2.0）的署名
+└── NOTICE                         sol-skill（MIT）等参考项目的署名
 ```
 
 ### 7.2 共享运行时（安装后，在每个用户自己的目录里）
@@ -388,6 +391,8 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 每个任务一个目录：`~/.agent-collab/runs/<仓库标识>/<任务号>/`。仓库标识由仓库根目录的真实路径算出（目录名加路径哈希的前几位）；任务号在仓库内递增，形如 `T001`。
 
+各文件的字段格式见 [protocol.md](protocol.md)。
+
 | 文件 | 内容 |
 |---|---|
 | `state.json` | 当前状态、工作进程 pid、执行端会话 id、收到的最后一个事件序号、返工轮次 |
@@ -420,6 +425,8 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 ### 9.2 方法
 
+参数、返回和扩展字段的具体格式见 [protocol.md](protocol.md)，本节只写行为。
+
 | ACP 方法 | 桥接的行为 |
 |---|---|
 | `initialize` | 校验令牌和协议版本（D22），返回能力：支持 `session/resume`、`session/close`；图片能力按当前模型实际情况声明 |
@@ -432,6 +439,8 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 | `_agentCollab/models`（扩展） | 列出 dsh 当前服务目录里可选的模型，给配置页用 |
 
 ### 9.3 事件转发
+
+各事件的字段见 [protocol.md](protocol.md)。
 
 - 标准的 `session/update`：
   - `agent_thought_chunk`（思考）
@@ -451,7 +460,7 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 - 所有 dsh 内部服务调用都集中在 `dsh-bridge/lib/dsh-api.js`，dsh 升级后只需要改这一个文件。
 - `package.json` 声明支持的 dsh 版本范围，加载时遇到不支持的版本，在 dsh 日志和发现文件里写明原因。
-- 桥接包除了 dsh 自己提供的服务，不依赖任何需要联网下载的包：ACP SDK 用 `bundledDependencies` 打进 `.tgz`，或者改用自写的精简实现（1a 定）。这样安装时不用为我们的包联网。实测：pnpm 就绪后安装无依赖的 `.tgz` 不需要联网；但用 corepack 第一次取得 pnpm 时要联网（5.6）。离线机器需要预先装好 pnpm，或预置 corepack 缓存，用户文档要写明。
+- 桥接包除了 dsh 自己提供的服务，不依赖任何需要联网下载的包：ACP 用自写的精简实现（换行分隔的 JSON-RPC 2.0，只实现用到的方法），客户端和桥接各一份，不附带 SDK（1a 定，用户 2026-10-23 确认）；方法和字段以 dsh 依赖里那份 SDK 的类型定义为准核对。这样安装时不用为我们的包联网。实测：pnpm 就绪后安装无依赖的 `.tgz` 不需要联网；但用 corepack 第一次取得 pnpm 时要联网（5.6）。离线机器需要预先装好 pnpm，或预置 corepack 缓存，用户文档要写明。
 - `doctor.mjs --deep` 跑一个最小冒烟：建会话 → 发一句话 → 收到事件 → 正常结束 → 关闭会话。
 - 发布前，在支持范围内的每个 dsh 版本上跑一遍桥接的集成测试。
 
@@ -504,7 +513,7 @@ dsh 的提问工具叫 `ask_user_question`（`dsh-tool-ask-user`），作为一�
 **脚本接口与设计端无关**：
 
 - `collab run start | resume | cancel | status --json`、`collab doctor`、`collab setup`、`collab sync`、`collab config`、`collab dashboard`。
-- 输出都是 JSON，状态都存在文件里，任何设计端都能驱动。
+- 输出都是 JSON，状态都存在文件里，任何设计端都能驱动。各命令的参数、JSON 输出和退出码见 [protocol.md](protocol.md)。
 
 ### 11.2 组合和选择
 
@@ -527,7 +536,7 @@ events                           → 统一格式的异步事件流：
                                    usage / human_message / approval / turn_end / error
 ```
 
-`run.mjs` 只认这套统一格式，它负责写 `events.jsonl`、提取汇报、卡死检测和生成 `summary.json`。
+`run.mjs` 只认这套统一格式，它负责写 `events.jsonl`、提取汇报、卡死检测和生成 `summary.json`。统一事件的字段见 [protocol.md](protocol.md)。
 
 ### 11.4 防止套娃
 
@@ -545,7 +554,7 @@ events                           → 统一格式的异步事件流：
    - dsh Web 已经开着但没装桥接插件：提示运行 `/collab-setup`，**不要再启动第二个 dsh Web**。
 3. 桥接不可用（没装、版本不兼容、自检失败）：退回 `dsh --profile acp`（ACP stdio），用同一套客户端代码。同时提醒用户：这个会话不会实时显示，任务结束前不要在 dsh Web 里打开它，否则会占锁。
    - 这种模式下没人能批准，审批请求按配置处理，默认拒绝。
-   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。实测可行：覆盖层能正常加载，ACP `session/new` 返回的当前模型就是覆盖层指定的模型；实现时要用可靠的 YAML 解析挑条目，不能靠简单的按行匹配。配置里明确指定了模型时，以配置为准。
+   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。实测可行：覆盖层能正常加载，ACP `session/new` 返回的当前模型就是覆盖层指定的模型；实现时要用可靠的 YAML 解析挑条目，不能靠简单的按行匹配：借用 dsh 安装目录里自带的 YAML 库（从解析出的 dsh 入口位置查找），格式和 dsh 自己的解析一致，也不给我们引入依赖；找不到时退回模式不可用，`doctor` 报告原因（1a 定，用户 2026-10-23 确认）。配置里明确指定了模型时，以配置为准。
    - 注意：第一次运行 `dsh --profile acp` 时，dsh 会按自带模板自动建出 `$DSH_HOME/profiles/acp` 目录。这是 dsh 自己的行为；如果这个目录是因为我们才出现的，就记入 `installed.json`，卸载时询问是否一并删除。
 - 启动 dsh：从 PATH 上的 `dsh` 解析出它的入口 `.js` 文件，再用 `process.execPath` 运行，绕开 Windows 上 npm 生成的 `.cmd` 包装，也不依赖 dsh 装在哪个 Node 版本管理器下。
 
@@ -633,6 +642,8 @@ events                           → 统一格式的异步事件流：
 
 - `model`、`reasoningEffort`、`env`、`command` 这类按执行端设置的项，放在 `executors.<名称>` 下，比如 `executors.codex.model`；写在顶层的值作为所有执行端的默认值。
 - `permissionPreset` 是抽象级别，各执行端怎么对应见 11.9。
+- **项目级不能覆盖的项**：项目文件 `.agent-collab.json` 随仓库来，可能不可信，所以权限和执行环境类的项只能在全局和单个任务两级设置：`permissionPreset`、`unattendedApproval`、`allowedRoots`、`env`、`inheritEnv`、`executors.*.command`、`executors.*.env`、`dsh.*`、`autoSync`、`runRetentionDays`。项目文件里出现这些项时报错并忽略该项。其余项三级都可以设。schema 里用 `x-scopes` 标注每项允许的级别（1a 定，用户 2026-10-23 确认）。
+- **项目级只能收紧的项**：下面 4 项项目文件可以设，但只能往安全的方向改：`protectedPaths` 与前面各级取并集（不替换）；`confirmBeforeDispatch` 按 `never` < `risky` < `always` 取较严的；`freshReviewForRisky` 只有 `true` 生效；`commitOnAccept` 只有 `false` 生效。往放宽方向改时报错并忽略该项。单个任务级不受此限制。收紧规则在 schema 里用 `x-` 键标注（S1 验收时发现，用户 2026-10-23 确认）。
 
 ### 12.3 本地配置页（第 1b 阶段）
 
@@ -960,7 +971,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 12. 从 dsh Web 所用 profile 的用户配置层挑出服务商条目、生成 acp 覆盖层的做法是否可行：挑哪些条目才完整，这些条目在 acp 组合里能否正常加载（11.5）。**已验证：可行；只测了一个服务商条目加默认模型的最小组合。**
 13. 桥接能否从 dsh 的服务目录列出可选模型，给配置页用（9.2、12.3）。
 14. 怎么在不消耗太多 token 的前提下，检查 codex、claude 实际会用的端点和模型（11.8）。
-15. dsh 桌面版（Electron 管理的 `desktop` profile）能否、以及怎么安装桥接（5.6）。
+15. dsh 桌面版（Electron 管理的 `desktop` profile）能否、以及怎么安装桥接（5.6）。**2026-10-23 提前在 Windows 上做探针**（实验 `experiments/1a/15-desktop-windows/`，由 Windows 上的 Claude Code 运行）：桌面版自带的命令入口能否装 `.tgz`、插件能否拿到和 Web 一样的服务、会话能否显示在侧栏、桌面版是否认 `DSH_HOME`、只装桌面版时有没有 Node 和命令行 `dsh`。
 16. Claude Code 插件里的 skill，能否用 frontmatter 的 `allowed-tools` 放行 `collab` 命令（第 8 节）。**已验证：可以，并且能写成只放行一个脚本的窄规则。**
 17. Claude 会话结束时（包括在 Desktop 里关掉会话），从 Bash 启动的独立工作进程能否存活；Windows 上用什么方式脱离父进程（D20）。**Linux 已验证：终端和 Desktop 下都能存活（`detached` 加 `unref`）。Windows 待验证（第 2 阶段 Windows 验证时做）。**
 18. `dsh plugin add <tgz>` 时 pnpm 是否需要联网，离线机器能否安装（9.4）。**已验证：首次取得 pnpm 要联网，之后可离线。**
@@ -970,7 +981,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 
 - [ozankasikci/sol-skill](https://github.com/ozankasikci/sol-skill)（MIT）：流程、任务书模板、汇报格式、补丁生成方法。改编的部分在 NOTICE 里署名。
 - [firstintent/ccteam](https://github.com/firstintent/ccteam)（MIT）：dsh 插件桥接的思路（`dsh-plugins/ccteam-ui/src/transport.ts`）。只参考设计，不复制代码。
-- [Agent Client Protocol](https://agentclientprotocol.com)；`@agentclientprotocol/sdk`（Apache-2.0）。如果随仓库附带，要保留许可证。
+- [Agent Client Protocol](https://agentclientprotocol.com)；`@agentclientprotocol/sdk`（Apache-2.0）。1a 决定自写精简实现，不附带 SDK，只参照它的类型定义核对字段；以后如果附带，要保留许可证。
 - dsh 源码和文档：见第 5 节。
 
 ---
@@ -1009,3 +1020,4 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 - 开发期仓库位置不固定，代码和测试不能依赖它；它所在的文件系统可能不支持权限位。共享运行时仍然装在各系统自己的用户目录里。
 - 设计讨论和实现分开进行：本文件由设计讨论会话维护，实现在单独的会话里进行。实现中发现和本文不符的地方，先更新本文再改代码。
 - 测试不能依赖开发机的特有配置：集成测试用临时的 `DSH_HOME`、`AGENT_COLLAB_HOME` 和 PATH，必要时用容器模拟不同环境（见 T19）。
+- 桥接和端到端测试优先用本地假 LLM 服务：一个 Node HTTP 服务，按 OpenAI 兼容接口（dsh 服务商条目的 `api: openai-completions` 加 `baseURL`）按脚本返回文字和工具调用，结果确定、不花 token。真实模型只用于 T11、T13。可行性在 1a 实现的桥接一步先做探针确认，不成立就改用真实模型（1a 定，用户 2026-10-23 确认）。

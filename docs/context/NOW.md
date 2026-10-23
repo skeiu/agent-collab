@@ -10,7 +10,7 @@
 
 ## 验收标准
 
-1a 实现的分步计划和各步验收标准尚未起草；产品验收见 PLAN.md §15“验收”表（T1–T26）。
+1a 实现分 S0–S6 七步，各步验收标准见 [1a-impl-plan.md](1a-impl-plan.md)；产品验收见 PLAN.md §15“验收”表（T1–T26）。
 
 ## 进展
 
@@ -23,6 +23,7 @@
   - 第 2 批（§17 第 4 项，dsh 做，真实模型）：6 条全部通过（[history/2026-10-23-1a-batch2.md](history/2026-10-23-1a-batch2.md)）。
   - 主要设计变化：`agent-collab` 预设整份复制 `standard`；dsh 执行端防套娃变量为 `DSH_AGENT_COLLAB_ROLE`；更新插件要重启 dsh Web；命令带 `agent-collab:` 前缀；桥接只观察审批和提问（[DECISIONS.md](DECISIONS.md)）。
 - 2026-10-23 文档整理：R6 隔离要求移到 RUNBOOK 作为长期操作规程；第 2 批记录归档。
+- 2026-10-23 1a 实现计划：7 个实现决定【已确认】用户 2026-10-23，已回填 PLAN.md 并登记 DECISIONS.md；S1 任务书定稿；S0 接口契约草稿完成（[1a-impl-plan.md](1a-impl-plan.md)“进展”）。
 
 ## 阻塞与待核实
 
@@ -32,9 +33,11 @@
 
 ## 下一步
 
-1. Claude 起草 1a 实现的分步计划、各步验收标准和第一份任务书，给用户审阅。
-2. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
-3. 每次提交和推送都须用户授权。
+1. S1 完成：AC1–AC9 和返工 RW1–RW7 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”）。用户验收：尚未进行。2026-10-23 经用户授权提交，未推送。
+2. 用户审阅 S0 接口契约 [docs/protocol.md](../protocol.md)（草稿）；通过后 Claude 回填 PLAN.md §8 表格的三处出入，再起草 S2、S3 任务书。
+3. P15（Windows 桌面版探针，PLAN.md §17 第 15 项）：任务书 [briefs/1a-p15-desktop-windows.md](briefs/1a-p15-desktop-windows.md) 已定稿，待用户派发给 dsh；dsh 交付、Claude 核对空跑后，Windows 上由那台机器的 Claude Code 按 README 执行，这边的 Claude 对照结果文件验收。
+4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
+5. 每次提交和推送都须用户授权。
 
 ## 证据入口
 

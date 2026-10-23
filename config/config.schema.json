@@ -1,0 +1,755 @@
+{
+  "description": "本文件：agent-collab 全部配置项的唯一描述。默认值只写在这里；所有界面从它生成。配置项或默认值变化时更新。项目级收紧规则用 x-project-tighten 标注：strategy=union 表示项目级值与前面各级取并集并去重；strategy=max 表示按 order 数组从宽到严取更严的值；strategy=only 表示项目级只有 value 这一个是安全值，其他值视为放宽。",
+  "title": "agent-collab 配置",
+  "version": 1,
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "executorByDesigner": {
+      "type": "object",
+      "default": {
+        "claude": "dsh",
+        "dsh": "claude",
+        "codex": "dsh"
+      },
+      "properties": {
+        "claude": {
+          "type": "string",
+          "default": "dsh"
+        },
+        "dsh": {
+          "type": "string",
+          "default": "claude"
+        },
+        "codex": {
+          "type": "string",
+          "default": "dsh"
+        }
+      },
+      "additionalProperties": {
+        "type": "string"
+      },
+      "x-title": {
+        "zh": "各设计端的默认执行端",
+        "en": "Default executor per designer"
+      },
+      "x-description": {
+        "zh": "各设计端的默认执行端",
+        "en": "Default executor per designer"
+      },
+      "x-group": "roles",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "warnSameAgentPair": {
+      "type": "boolean",
+      "default": true,
+      "x-title": {
+        "zh": "同一工具担任两端时提示",
+        "en": "Warn when the same tool is on both sides"
+      },
+      "x-description": {
+        "zh": "同一工具担任两端时提示",
+        "en": "Warn when the same tool is on both sides"
+      },
+      "x-group": "roles",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "executors": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "x-title": {
+              "zh": "执行端 CLI 路径",
+              "en": "Executor CLI path"
+            },
+            "x-description": {
+              "zh": "执行端 CLI 路径",
+              "en": "Executor CLI path"
+            },
+            "x-group": "executors",
+            "x-scopes": [
+              "global",
+              "task"
+            ]
+          },
+          "model": {
+            "type": [
+              "string",
+              "object",
+              "null"
+            ],
+            "default": null,
+            "properties": {
+              "provider": {
+                "type": "string"
+              },
+              "model": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "provider",
+              "model"
+            ],
+            "additionalProperties": false,
+            "x-title": {
+              "zh": "模型",
+              "en": "Model"
+            },
+            "x-description": {
+              "zh": "模型",
+              "en": "Model"
+            },
+            "x-group": "model",
+            "x-scopes": [
+              "global",
+              "project",
+              "task"
+            ]
+          },
+          "reasoningEffort": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "follow",
+              "low",
+              "medium",
+              "high",
+              "max",
+              null
+            ],
+            "default": null,
+            "x-title": {
+              "zh": "执行端思考强度",
+              "en": "Executor reasoning effort"
+            },
+            "x-description": {
+              "zh": "执行端思考强度",
+              "en": "Executor reasoning effort"
+            },
+            "x-group": "model",
+            "x-scopes": [
+              "global",
+              "project",
+              "task"
+            ]
+          },
+          "env": {
+            "type": "object",
+            "default": {},
+            "additionalProperties": {
+              "type": "string"
+            },
+            "x-title": {
+              "zh": "执行端环境变量",
+              "en": "Executor environment variables"
+            },
+            "x-description": {
+              "zh": "执行端环境变量",
+              "en": "Executor environment variables"
+            },
+            "x-group": "environment",
+            "x-scopes": [
+              "global",
+              "task"
+            ]
+          }
+        }
+      },
+      "x-title": {
+        "zh": "按执行端设置的选项",
+        "en": "Per-executor options"
+      },
+      "x-description": {
+        "zh": "按执行端设置的选项",
+        "en": "Per-executor options"
+      },
+      "x-group": "executors",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "dsh": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": false,
+      "properties": {
+        "home": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null,
+          "x-title": {
+            "zh": "dsh 数据目录",
+            "en": "dsh data directory"
+          },
+          "x-description": {
+            "zh": "dsh 数据目录",
+            "en": "dsh data directory"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "profile": {
+          "type": "string",
+          "default": "web",
+          "x-title": {
+            "zh": "dsh Web 使用的 profile",
+            "en": "Profile used by dsh Web"
+          },
+          "x-description": {
+            "zh": "dsh Web 使用的 profile",
+            "en": "Profile used by dsh Web"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "transport": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "bridge",
+            "acp"
+          ],
+          "default": "auto",
+          "x-title": {
+            "zh": "dsh 连接方式",
+            "en": "dsh transport"
+          },
+          "x-description": {
+            "zh": "dsh 连接方式",
+            "en": "dsh transport"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "autoStartWeb": {
+          "type": "boolean",
+          "default": true,
+          "x-title": {
+            "zh": "dsh Web 未运行时自动启动",
+            "en": "Start dsh Web automatically when it is not running"
+          },
+          "x-description": {
+            "zh": "dsh Web 未运行时自动启动",
+            "en": "Start dsh Web automatically when it is not running"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "openBrowserOnStart": {
+          "type": "boolean",
+          "default": true,
+          "x-title": {
+            "zh": "启动 dsh Web 时打开浏览器",
+            "en": "Open a browser when starting dsh Web"
+          },
+          "x-description": {
+            "zh": "启动 dsh Web 时打开浏览器",
+            "en": "Open a browser when starting dsh Web"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "webArgs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "x-title": {
+            "zh": "启动 dsh Web 时追加的参数",
+            "en": "Extra arguments when starting dsh Web"
+          },
+          "x-description": {
+            "zh": "启动 dsh Web 时追加的参数",
+            "en": "Extra arguments when starting dsh Web"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        },
+        "agentPreset": {
+          "type": "string",
+          "default": "agent-collab",
+          "x-title": {
+            "zh": "dsh 会话使用的工具预设",
+            "en": "Tool preset used by dsh sessions"
+          },
+          "x-description": {
+            "zh": "dsh 会话使用的工具预设",
+            "en": "Tool preset used by dsh sessions"
+          },
+          "x-group": "dsh",
+          "x-scopes": [
+            "global",
+            "task"
+          ]
+        }
+      },
+      "x-title": {
+        "zh": "dsh 相关设置",
+        "en": "dsh settings"
+      },
+      "x-description": {
+        "zh": "dsh 相关设置",
+        "en": "dsh settings"
+      },
+      "x-group": "dsh",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "model": {
+      "type": [
+        "string",
+        "object",
+        "null"
+      ],
+      "default": null,
+      "properties": {
+        "provider": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "additionalProperties": false,
+      "x-title": {
+        "zh": "模型",
+        "en": "Model"
+      },
+      "x-description": {
+        "zh": "模型",
+        "en": "Model"
+      },
+      "x-group": "model",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "reasoningEffort": {
+      "type": "string",
+      "enum": [
+        "follow",
+        "low",
+        "medium",
+        "high",
+        "max"
+      ],
+      "default": "high",
+      "x-title": {
+        "zh": "思考强度",
+        "en": "Reasoning effort"
+      },
+      "x-description": {
+        "zh": "思考强度",
+        "en": "Reasoning effort"
+      },
+      "x-group": "model",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "permissionPreset": {
+      "type": "string",
+      "enum": [
+        "read-only",
+        "workspace-write",
+        "danger-full-access"
+      ],
+      "default": "workspace-write",
+      "x-title": {
+        "zh": "权限级别",
+        "en": "Permission preset"
+      },
+      "x-description": {
+        "zh": "权限级别",
+        "en": "Permission preset"
+      },
+      "x-group": "permission",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "unattendedApproval": {
+      "type": "string",
+      "enum": [
+        "deny",
+        "allow"
+      ],
+      "default": "deny",
+      "x-title": {
+        "zh": "无人能批准时的处理",
+        "en": "Approval policy when nobody can approve"
+      },
+      "x-description": {
+        "zh": "无人能批准时的处理",
+        "en": "Approval policy when nobody can approve"
+      },
+      "x-group": "permission",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "protectedPaths": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": [],
+      "x-title": {
+        "zh": "受保护路径",
+        "en": "Protected paths"
+      },
+      "x-description": {
+        "zh": "受保护路径",
+        "en": "Protected paths"
+      },
+      "x-group": "permission",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ],
+      "x-project-tighten": {
+        "strategy": "union"
+      }
+    },
+    "allowedRoots": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "type": "string"
+      },
+      "default": null,
+      "x-title": {
+        "zh": "允许派发任务的目录",
+        "en": "Allowed roots for dispatching tasks"
+      },
+      "x-description": {
+        "zh": "允许派发任务的目录",
+        "en": "Allowed roots for dispatching tasks"
+      },
+      "x-group": "permission",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "confirmBeforeDispatch": {
+      "type": "string",
+      "enum": [
+        "always",
+        "risky",
+        "never"
+      ],
+      "default": "risky",
+      "x-title": {
+        "zh": "派发前确认的时机",
+        "en": "When to confirm before dispatch"
+      },
+      "x-description": {
+        "zh": "派发前确认的时机",
+        "en": "When to confirm before dispatch"
+      },
+      "x-group": "workflow",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ],
+      "x-project-tighten": {
+        "strategy": "max",
+        "order": [
+          "never",
+          "risky",
+          "always"
+        ]
+      }
+    },
+    "maxCorrectionRounds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5,
+      "default": 2,
+      "x-title": {
+        "zh": "返工轮次上限",
+        "en": "Maximum correction rounds"
+      },
+      "x-description": {
+        "zh": "返工轮次上限",
+        "en": "Maximum correction rounds"
+      },
+      "x-group": "workflow",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "commitOnAccept": {
+      "type": "boolean",
+      "default": false,
+      "x-title": {
+        "zh": "验收后自动提交",
+        "en": "Commit automatically after acceptance"
+      },
+      "x-description": {
+        "zh": "验收后自动提交",
+        "en": "Commit automatically after acceptance"
+      },
+      "x-group": "workflow",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ],
+      "x-project-tighten": {
+        "strategy": "only",
+        "value": false
+      }
+    },
+    "freshReviewForRisky": {
+      "type": "boolean",
+      "default": false,
+      "x-title": {
+        "zh": "高风险改动另开只读会话复审",
+        "en": "Open a fresh read-only review for risky changes"
+      },
+      "x-description": {
+        "zh": "高风险改动另开只读会话复审",
+        "en": "Open a fresh read-only review for risky changes"
+      },
+      "x-group": "workflow",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ],
+      "x-project-tighten": {
+        "strategy": "only",
+        "value": true
+      }
+    },
+    "language": {
+      "type": "string",
+      "enum": [
+        "auto",
+        "zh",
+        "en"
+      ],
+      "default": "auto",
+      "x-title": {
+        "zh": "界面和文档语言",
+        "en": "Language for UI and docs"
+      },
+      "x-description": {
+        "zh": "界面和文档语言",
+        "en": "Language for UI and docs"
+      },
+      "x-group": "workflow",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "idleTimeoutMinutes": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 1440,
+      "default": 15,
+      "x-title": {
+        "zh": "空闲超时（分钟）",
+        "en": "Idle timeout in minutes"
+      },
+      "x-description": {
+        "zh": "空闲超时（分钟）",
+        "en": "Idle timeout in minutes"
+      },
+      "x-group": "limits",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "taskTimeoutMinutes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "maximum": 10080,
+      "default": null,
+      "x-title": {
+        "zh": "任务超时（分钟）",
+        "en": "Task timeout in minutes"
+      },
+      "x-description": {
+        "zh": "任务超时（分钟）",
+        "en": "Task timeout in minutes"
+      },
+      "x-group": "limits",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "tokenBudget": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "default": null,
+      "x-title": {
+        "zh": "单个任务的 token 上限",
+        "en": "Token budget per task"
+      },
+      "x-description": {
+        "zh": "单个任务的 token 上限",
+        "en": "Token budget per task"
+      },
+      "x-group": "limits",
+      "x-scopes": [
+        "global",
+        "project",
+        "task"
+      ]
+    },
+    "env": {
+      "type": "object",
+      "default": {},
+      "additionalProperties": {
+        "type": "string"
+      },
+      "x-title": {
+        "zh": "传给执行端的环境变量",
+        "en": "Environment variables passed to executors"
+      },
+      "x-description": {
+        "zh": "传给执行端的环境变量",
+        "en": "Environment variables passed to executors"
+      },
+      "x-group": "environment",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "inheritEnv": {
+      "type": "string",
+      "enum": [
+        "designer",
+        "login-shell"
+      ],
+      "default": "designer",
+      "x-title": {
+        "zh": "执行端的环境继承方式",
+        "en": "How executors inherit environment variables"
+      },
+      "x-description": {
+        "zh": "执行端的环境继承方式",
+        "en": "How executors inherit environment variables"
+      },
+      "x-group": "environment",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "autoSync": {
+      "type": "boolean",
+      "default": true,
+      "x-title": {
+        "zh": "插件升级后自动同步",
+        "en": "Synchronize automatically after plugin upgrades"
+      },
+      "x-description": {
+        "zh": "插件升级后自动同步",
+        "en": "Synchronize automatically after plugin upgrades"
+      },
+      "x-group": "install",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    },
+    "runRetentionDays": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 3650,
+      "default": 30,
+      "x-title": {
+        "zh": "运行记录保留天数",
+        "en": "Days to keep run records"
+      },
+      "x-description": {
+        "zh": "运行记录保留天数",
+        "en": "Days to keep run records"
+      },
+      "x-group": "storage",
+      "x-scopes": [
+        "global",
+        "task"
+      ]
+    }
+  }
+}
