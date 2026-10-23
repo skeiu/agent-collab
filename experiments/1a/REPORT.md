@@ -87,3 +87,29 @@
 | 16 | `allowed-tools` 放行 `collab` | 成立 | `Bash(node:*)` 放行、对照组被拒；窄规则 `Bash(node "${CLAUDE_PLUGIN_ROOT}/bin/probe.mjs":*)` 只放行这一个脚本 | §8：用窄规则只放行 `collab.mjs` |
 | 17 | 会话结束后工作进程能否存活 | CLI 下成立 | detached + unref：`claude -p` 退出后心跳继续；`run_in_background`：`claude -p` 会等它跑完才退出 | D20 的做法可行；不能用 `run_in_background` 跑工作进程。Desktop：用户在 Code 标签页新开会话启动 detached 工作进程后删除该会话，进程继续写心跳，父进程变为 `systemd --user`，【已验证】2026-10-23。Windows【未验证】 |
 
+## 第 2 批：§17 第 4 项（2026-10-23，dsh 实测，真实模型）
+
+实验目录：`experiments/1a/04-approval-question/`。用临时 `DSH_HOME` 启动被测 `dsh web --port 0 --no-open`，测试插件建 3 个 `standard` 预设会话，沙箱 `read-only`、审批策略 `ask`：第一次写文件由插件批准，第二次拒绝；第三个会话调用一次 `ask_user_question` 并由插件回答固定答案，再让模型复述。模型配置由 `AC_REAL_DSH_HOME` 指向的真实 profile 中只读挑出的 `llm-*` 与 `agent-default-model` 条目生成，`.env` 只建符号链接。
+
+| 问题 | 结论 | 关键事件摘录 | 对 PLAN.md 的影响 |
+|---|---|---|---|
+| 审批请求和结果能否通过 `ctx.on('session/event')` 收到；事件名和关键字段 | 成立：能收到 `approval/asked` 和 `approval/decided`，两者用同一个 `id` 配对；`approval/asked` 字段为 `id`、`toolName`、`callId`、`reason`；`approval/decided` 字段为 `id`、`outcome`（`allowed-once`/`rejected`） | `approval/asked {"id":"e6c72426…","toolName":"write","callId":"call_00_…","reason":"escalate sandbox to workspace-write: …"}`；`approval/decided {"id":"e6c72426…","outcome":"allowed-once"}`；拒绝组同一 `id` 的 `outcome` 为 `"rejected"` | §9.3 的 `approval_pending`/`approval_resolved` 可以直接由这对事件驱动；§5.2 的“每次审批记两条事件”成立，字段可按实测补进 §9.3 |
+| “等待审批”能否从会话状态（如 `agent.status`）或事件里判断出来 | 成立（限定方式）：`agent.status` 只有 `idle`/`running` 两种，等待审批时仍是 `running`（`approval/asked` 和 `approval/decided` 时都为 `running`），不能单独判断；事件可以：`approval/asked` 已到、`approval/decided` 未到即为等待中 | `status-at-asked=running`、`status-at-decided=running`、`status-at-when-idle=idle` | §9.3 不要依赖 `agent.status` 判定审批等待；桥接需要自己维护 pending 审批集合（或从事件折叠），再发 `approval_pending`/`approval_resolved` |
+| 插件能否用代码批准或拒绝审批；用的是哪个服务、哪个方法 | 成立（本实验没有连接 Web UI 客户端）：插件注册 `ctx.on('approval/request', (request, next) => …)` 作为 waterfall 应答者，返回 `"allowed-once"` 或 `"rejected"`；服务是 `approval`（`ctx.approval`），其 `request()` 方法发出 `approval/request`；没有单独的服务“answer”方法 | 批准组 `write` 成功、文件写出、`approval/decided outcome="allowed-once"`；拒绝组工具返回错误、文件不存在、`outcome="rejected"` | §9.3/§11.9：桥接插件自身可以作为审批应答者（实现自动批准/拒绝或超时策略）；若仍需人审，在应答器里调用 `next()`，交给 Web UI |
+| `ask_user_question` 的提问在插件里能否看到、能否回答、回答后模型能否收到 | 成立（有保留；本实验没有连接 Web UI 客户端）：`tool/call` 事件带完整 `questions`；`user-questions/request` 的服务请求也带完整 `questions`（`requestKeys: questions, agent, signal`，legacy 模式没有 `callId`）；插件在应答器返回 `{answers:[{id:"magic",selected:[],custom:"PLUM-731"}]}` 后，`tool/result` 含答案，模型回复 `ANSWER=PLUM-731`。保留：标准预设的 legacy 模式 `userQuestions` 投影为 `timed=false`、`active=[]`，不能靠投影看待答问题；投影只记录 timed 模式的 continued 问题（源码检查，未实测 timed） | `tool/call {"name":"ask_user_question","callId":"call_00_…","questions":[{"id":"magic","question":"What is the magic word?"}]}`；服务请求 `{"requestKeys":["questions","agent","signal"],"questions":[…]}`（无 `wait`/`callId`）；最终回复 `"ANSWER=PLUM-731"` | §9.3/§9.5：`question_pending` 可监听 `tool/call`（有 `callId`）或 `user-questions/request`（无 `callId`，需与 tool/call 关联）；legacy 模式的待答问题不在 `userQuestions` 投影里；桥接默认去掉 `tool-ask-user` 后这条路径不会出现，fallback 时需使用应答器或 Web UI |
+
+### 说明
+
+- **模型类别**：网关上的某个对话模型（报告不记录服务商名称、网关地址和模型 id）。
+- **运行次数和轮数**：共运行 5 次（首次发现 legacy 投影不记录待答问题后修正实验判据，后 4 次为复跑；模型行为一致）；每次 3 个会话、3 个用户轮次，模型响应 6 次（每个会话“工具调用 + 最终回复”两步）。最终一次运行的 usage 为 input≈2.0k、output≈0.48k token，provider 报的 total≈46k（含缓存）；调用量很小，未单独估算金额。
+- **审批路径**：被测会话的沙箱由 `agent.session.append('sandbox/mode', {mode:'read-only'})` 设为只读，审批策略用 `approval/policy: ask`；模型按任务书在 `write` 调用里带 `sandbox_permissions:"workspace-write"` 和 justification，触发 `approval/request`。插件只对这两个测试会话应答，其他请求 `next()`。
+- **提问路径**：标准预设里的 `tool-ask-user` 是 legacy 阻塞模式；插件监听 `user-questions/request`，记录服务传入的 `questions` 后返回固定答案。工具结果和模型最终回复都包含该答案。
+- **隔离与清理**：被测 dsh 的 `DSH_HOME` 是 `os.tmpdir()` 下新建目录，`dsh web --port 0 --no-open`；`.env` 只建符号链接，实验代码只对链接做 `lstat`/`readlink`，不读取内容；结束后按 PID 停止 Web、删除链接本身和临时目录，检查 `/tmp` 无 `agent-collab-1a-04-*` 残留。
+- **测试**：`npm test` 仍为 3/3（`node --test` 未发现 experiments 目录下的脚本）。
+- **局限**：被测 dsh Web 没有连接 Web UI 客户端；真实 Web 会话里 `dsh-api-remotes` 还有面向 UI 的 `approval/request`/`user-questions/request` 应答器，插件监听顺序和优先级未测（必要时可用 `prepend`）。只测了 `write` 工具的审批，未测 bash 的审批事件；只测了 legacy `ask_user_question`，未测 timed 模式的 `continued`/投影路径；`agent.status` 是采样观察，不是连续监听；模型具有随机性，结论按 5 次运行的行为一致给出。
+
+### 对 PLAN.md 的回填建议
+
+- §9.3：审批状态直接由 `approval/asked`/`approval/decided` 事件对生成；等待审批不依赖 `agent.status`。
+- §9.3/§9.5：`question_pending` 的可靠来源是 `tool/call` 事件（带 `callId`）；`user-questions/request` 可提供问题内容但 legacy 模式不含 `callId`，需要与 `tool/call` 关联。`userQuestions` 投影只覆盖 timed 模式的 continued 问题。
+- §9.3/§11.9：桥接插件可以作为 `approval/request` 的应答者，用返回 `"allowed-once"`/`"rejected"` 实现自动审批；若采用人审，则应答器应委托给 Web UI。

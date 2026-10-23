@@ -1,6 +1,6 @@
 # agent-collab 方案
 
-> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文；Claude 侧（第 8、16、17 项）的结论也已回填。
+> 状态：设计已定稿，尚未实现。2026-10-23 完成第 0 阶段；第 1a 阶段技术验证第 1 批（第 17 节第 1、2、3、6、7、12、18 项）的结论已回填本文；Claude 侧（第 8、16、17 项）和第 2 批（第 4 项）的结论也已回填，1a 的技术验证完成（Desktop 里插件相关的验证并入 T20，Windows 的验证放到第 2 阶段）。
 > 来源：2026-10-23 的设计讨论。同日复查时对照 dsh 源码更正了两处事实（权限预设、提问工具），并补充了 D20–D23 和相关细节（D20–D23 已经用户确认）。
 > 本文描述的是**通用产品**的设计，不针对某一台机器。所有和环境有关的信息（工具装在哪、用哪家模型服务商、端口、磁盘类型等）都靠运行时探测和配置获得。
 > 关于 dsh 行为的事实，依据是 dsh 0.2.1-rc.2 的源码、文档和一台 Linux 开发机上的实测（实测记录见附录 A）。实现时如果发现 dsh 新版本的行为不同，以实际情况为准，并回头更新本文。
@@ -441,10 +441,11 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 - 扩展通知 `_agentCollab/status`（带下划线前缀，符合 ACP 的扩展规则）：
   - 每一步结束时的 token 用量
   - `turn_end` 及原因
-  - 审批状态：`approval_pending` / `approval_resolved`，来自会话日志里的 `approval/asked`、`approval/decided` 事件（5.2）
-  - 提问状态：`question_pending`，执行端调用了 `ask_user_question` 时发出（见 9.5）
+  - 审批状态：`approval_pending` / `approval_resolved`，来自会话日志里的 `approval/asked`、`approval/decided` 事件（5.2）。实测：通过 `ctx.on('session/event')` 能收到这对事件，两者用同一个 `id` 配对；`approval/asked` 带 `id`、`toolName`、`callId`、`reason`，`approval/decided` 带 `id`、`outcome`（如 `allowed-once`、`rejected`）。等待审批期间 `agent.status` 仍是 `running`，不能据此判断；桥接按“已 asked、未 decided”自己维护待审批集合
+  - 提问状态：`question_pending`，执行端调用了 `ask_user_question` 时发出（见 9.5）。实测：以 `ask_user_question` 的 `tool/call` 事件为准，它带 `callId` 和完整的问题；`user-questions/request` 也带问题但不带 `callId`；`standard` 预设下的提问是阻塞模式，`userQuestions` 的投影里看不到待答问题
   - 用户在 Web 里停止了任务：`stopped_by_human`
 - **审批**：桥接模式下审批由人在 dsh Web 里处理，桥接**不会**把 `session/request_permission` 发给客户端，只用状态通知告诉客户端有审批在等。等审批期间暂停卡死计时。
+  - 实测插件也能用代码应答：注册 `ctx.on('approval/request', (request, next) => …)`，返回 `allowed-once` 或 `rejected`，不处理的交给 `next()`；`ask_user_question` 同理可以监听 `user-questions/request` 并返回答案。本设计不用这个能力：桥接只观察事件，不注册应答者，审批和提问都留给人。以后要做自动审批时，还要先验证它和 dsh Web 自带应答者的先后顺序。
 
 ### 9.4 兼容性和自检
 
@@ -823,7 +824,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 | 1. 能否派生一个去掉 `ask_user_question` 的工具预设 | 只能靠任务书约束，同时转发它的提问 | 不能派生；改为整份复制 `standard`，可行（9.5） |
 | 2. `agentPresets` 的预设 id 和 `mount` 签名 | 桥接建的会话没有工具，桥接方案要改 | 成立；要显式 `mount`（5.4） |
 | 3. `workspaceRegistry` 遇到已有工作区时的行为 | 会话挂不到侧栏对应的工作区下 | 成立：复用已有工作区（5.4） |
-| 4. 审批和提问能否从会话事件里观察到 | 看不到"等待审批"，卡死检测只能放宽 | 待验证（需要模型） |
+| 4. 审批和提问能否从会话事件里观察到 | 看不到"等待审批"，卡死检测只能放宽 | 成立：事件可观察，等待状态由事件判断，不看 `agent.status`（9.3） |
 | 6. 能否给单个会话的 shell 注入环境变量 | 防套娃只能靠任务书约束；`executors.dsh.env` 在桥接模式下不生效 | 部分成立：只能用 `DSH_` 开头的变量（11.4） |
 | 7. 装或更新插件后要不要重启 dsh Web | 影响 1b 的自动同步设计 | 部分成立：新装可热加载，更新要重启（5.6、14.5） |
 | 8. Claude Code 插件：命令名前缀、Monitor、skill 怎么引用插件目录 | 影响 skill 的写法和用户要输入的命令 | 部分成立：带前缀；`${CLAUDE_PLUGIN_ROOT}` 可用；hook 运行、Monitor 可用。Desktop 里插件的部分留到 T20（第 8 节、第 17 节） |
@@ -942,7 +943,7 @@ codex 有原生的 `--output-schema`；dsh 没有；claude 有没有类似参数
 1. 能否在桥接的 bundle 补丁里基于 `standard` 派生一个去掉 `ask_user_question` 的工具预设（9.5）。**已验证：不能派生，改为整份复制。**
 2. `agentPresets` 的预设 id 和 `mount` 的签名，在支持的 dsh 版本中是否和 ccteam 代码注释描述的一致。**已验证（5.4）。**
 3. `workspaceRegistry.create` 遇到已存在的工作区时，是复用还是报错。**已验证：复用。**
-4. 审批和提问在插件里怎么观察。文档显示审批会在会话日志里写 `approval/asked`、`approval/decided`，提问是 `ask_user_question` 的工具调用；要实测能否通过 `session/event` 收到（9.3）。
+4. 审批和提问在插件里怎么观察。文档显示审批会在会话日志里写 `approval/asked`、`approval/decided`，提问是 `ask_user_question` 的工具调用；要实测能否通过 `session/event` 收到（9.3）。**已验证（真实模型）：都能收到；插件也能用代码应答，但本设计不用。只测了 `write` 工具的审批和阻塞模式的提问。**
 5. 怎么可靠地检测某个执行端当前的服务商或网关是否支持图片（T11）。
 6. 桥接能否给单个 dsh 会话的 shell 注入环境变量（11.4 防套娃）。**已验证：可以，但键名必须以 `DSH_` 开头。**
 7. 装或更新插件后，热重载能否生效，还是必须重启 dsh Web（5.6、14.5）。**已验证：新装生效，更新要重启。**
