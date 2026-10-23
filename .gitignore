@@ -1,0 +1,13 @@
+# 本文件：git 忽略规则。构建产物和依赖目录不进仓库；生成后需要提交的 SKILL.md 不在此列（PLAN.md §7.1）。
+
+# 依赖目录（本项目不需要 npm install，保留以防误装）
+node_modules/
+
+# 构建产物
+dist/
+*.tgz
+
+# 编辑器与操作系统杂项
+.DS_Store
+Thumbs.db
+*.log

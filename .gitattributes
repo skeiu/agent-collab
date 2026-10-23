@@ -1,0 +1,13 @@
+# 本文件：git 换行符与文件类型规则。文本统一 LF，二进制不转换；跨 Linux/Windows/macOS 检出时保持一致。
+
+* text=auto eol=lf
+
+# 二进制文件不做换行符转换
+*.tgz binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

@@ -1,0 +1,24 @@
+# 本文件：CI 配置。三平台 × Node 20 与当前 LTS 跑 node --test；不执行 npm install（项目零依赖）。
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    name: node --test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        # 20 为最低支持版本；lts/* 由 setup-node 解析为运行时的当前 LTS，避免写死会过期的版本号。
+        node: [20, 'lts/*']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: node --test
