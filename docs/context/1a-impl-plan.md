@@ -25,14 +25,14 @@
 
 ## 步骤
 
-依赖：S0 ∥ S1 → S2 ∥ S3 → S4 → S5 → S6。S0 和 S1 互不依赖，可以同时进行。
+依赖：S0 ∥ S1 → S2 ∥ S3 → S4 → S5 → S6。S0 和 S1 互不依赖，可以同时进行。S2 和 S3 互不依赖，但都在同一个工作目录里改，同时做时 `npm test` 会跑到对方写到一半的测试，所以按 S2、S3 的顺序派发，一步验收完再派下一步。
 
 | 步 | 谁 | 内容 | 覆盖的 T |
 |---|---|---|---|
 | S0 | Claude | 接口契约 `docs/protocol.md`（决定 3），用户审阅 | — |
 | S1 | dsh | 基础模块：JSON-RPC 和 ACP 客户端、配置、汇报校验、平台工具（任务书 [briefs/1a-s1-foundation.md](briefs/1a-s1-foundation.md)） | T9 的提取和校验部分 |
-| S2 | dsh | 桥接插件 `dsh-bridge/` 全部第 9 节；构建打出 `.tgz`；假 LLM 服务和桥接集成测试 | T1（除 doctor）、T2–T6 的桥接部分 |
-| S3 | dsh | `run.mjs`（工作进程、基线、锁、事件、汇报提取和重发、补丁、违规、卡死、取消）、`watch.mjs`、`bin/collab.mjs` 开发模式；用假执行端测试 | T6 取消、T9、T10、T17、T21 的锁部分、T23、T24、T25 |
+| S2 | dsh | 桥接插件 `dsh-bridge/` 全部第 9 节；构建打出 `.tgz`；假 LLM 服务和桥接集成测试（任务书 [briefs/1a-s2-bridge.md](briefs/1a-s2-bridge.md)） | T1（除 doctor）、T2–T6 的桥接部分 |
+| S3 | dsh | `run.mjs`（工作进程、基线、锁、事件、汇报提取和重发、补丁、违规、卡死、取消）、`watch.mjs`、`bin/collab.mjs` 开发模式；用假执行端测试（任务书 [briefs/1a-s3-runtime.md](briefs/1a-s3-runtime.md)） | T6 取消、T9、T10、T17、T21 的锁部分、T23、T24、T25 |
 | S4 | dsh | `adapters/dsh.mjs`（桥接、自动启动 Web、退回 acp 和覆盖层）、`detect.mjs`、基础版 `doctor` | T1 doctor、T7、T8 |
 | S5 | Claude + dsh | skill 正文和模板（Claude）；`render-skill.mjs`、构建生成 `SKILL.md`、`.claude-plugin/plugin.json`、开发方式加载（dsh）；`docs/dev-setup.md` 的手动安装步骤 | T21 的预检部分 |
 | P15 | dsh 写探针，Windows 上的 Claude Code 运行，Claude 验收 | PLAN.md §17 第 15 项：dsh 桌面版（Windows）能否装桥接（任务书 [briefs/1a-p15-desktop-windows.md](briefs/1a-p15-desktop-windows.md)）。不在 S 序列里，不阻塞 1a，可以和 S1 并行 | — |
@@ -44,12 +44,12 @@
 
 - **S0**：契约覆盖 S2、S3 之间传递的每一个字段和每一种事件；PLAN.md §9.2、§9.3、§11.3、§8“运行目录和任务状态”里出现的字段都能在契约里找到；用户审阅通过。
 - **S1**：见任务书 AC1–AC9；返工见 [briefs/1a-s1-rework.md](briefs/1a-s1-rework.md) RW1–RW7。
-- **S2**：
+- **S2**：详细见任务书 AC1–AC8，要点：
   - 假 LLM 探针有结论（成立就用，不成立记录原因后改用真实模型）。
   - 集成测试一条命令跑完，在临时 `DSH_HOME` 里：打包、`dsh plugin add`、启动 Web、发现文件内容和权限正确、错误令牌被断开、协议版本不兼容被拒绝。
   - 用 S1 的 ACP 客户端连桥接：`session/new` 后会话挂在对应工作区下、挂了 `agent-collab` 预设、注入了 `DSH_AGENT_COLLAB_ROLE`；`session/prompt` 收到 `session/update`；审批触发 `approval_pending` / `approval_resolved`；`session/cancel` 能取消；断开重连后 `session/resume` 带 `sinceSeq` 补发的事件不缺不重。
   - 所有 dsh 内部调用只出现在 `dsh-bridge/lib/dsh-api.js`。
-- **S3**：
+- **S3**：详细见任务书 AC1–AC13，要点：
   - 用假执行端（按契约发事件）跑通：start 立即返回任务号，工作进程独立存活；`wait`、`status --json`、`cancel`、`resume` 行为符合契约。
   - 基线：派发前已有的未跟踪文件和设计端预写的测试不进补丁；执行端提交或切分支被标记为违规；受保护路径被改动被标记。
   - 汇报：合法时提取成功；不合法时续接一次要求重发；仍不合法时标记 `report_invalid`。
@@ -71,7 +71,13 @@
   - dsh 的疑问已答：schema 顶层 `version` 符合 PLAN.md §12.1，不改；`loadConfig` 返回越权错误而不抛错，符合任务书；`inheritEnv` 取 `designer` / `login-shell`、`model` 允许字符串或 `{ provider, model }`，暂按此，S4 实现适配器时核对【未验证】。
   - ACP 字段的出入（`configId`/`value`、`mcpServers` 必填、权限应答是嵌套的 `outcome.outcome`）已补进 [protocol.md](../protocol.md) §2.5 或已与之一致；PLAN.md 没写到这层字段，不用改。
 - 2026-10-23 S1 返工验收：RW1–RW7 全部通过，S1 完成。【已验证】2026-10-23，Claude 在临时副本重跑 `npm test`（68/68）和 `npm run build`（退出码 0），`grep "'high'" core/` 和 16 个别名的 grep 都无结果；外层 bwrap 下集成脚本 `RESULT: 通过`；另写 8 个边界用例核对收紧规则（含没有全局文件时按 schema 默认值比较、4 项同时放宽、任务级放宽），结果都符合 PLAN.md §12.2；`~/.dsh/profiles` 哈希、文件清单和用户 dsh Web 的 PID 与派发前一致，改动只在 `core/`、`config/`、`tests/`；会话日志里返工轮次全程 `workspace-write`，没有权限变化，命令里没有读写 `~/.dsh` 或 `.env`、按名字结束进程或提交。dsh 选的标注是 `x-project-tighten`（`union` / `max` + `order` / `only` + `value`），放宽时报 `ConfigTightenError`（继承 `ConfigScopeError`，`reason: 'loosens'`）。
-  - 留给后续步骤：单行超长时 `JsonRpcPeer` 只停止处理并发出 `close`，不回收底层的子进程或 socket；S2、S3 任务书要写明调用方收到 `AcpClient` 的 `close` 事件后调用 `client.close()`。
+  - 留给后续步骤：单行超长时 `JsonRpcPeer` 只停止处理并发出 `close`，不回收底层的子进程或 socket；调用方收到 `AcpClient` 的 `close` 事件后要调用 `client.close()`。S2 的桥接是服务端、S3 用假适配器，都不涉及；改由 S4（`adapters/dsh.mjs`）的任务书写明。
   - 小出入，不返工：项目级 `protectedPaths: []` 按并集本是空操作，dsh 把它当放宽报错（其余数组不报），可以接受；dsh 自己的会话里套不了外层 bwrap，这一项由 Claude 验收时跑。
 - 2026-10-23 用户要求提前做 §17 第 15 项的 Windows 桌面版探针（P15），任务书定稿，待派发。
-- 2026-10-23 S0 接口契约草稿 [docs/protocol.md](../protocol.md) 写完，待用户审阅。审阅通过后把其中和 PLAN.md §8 表格的三处出入（`prompt-<n>.md`、仓库级 `active.lock`、`cancel.request`）回填 PLAN.md。
+- 2026-10-23 S0 接口契约 [docs/protocol.md](../protocol.md) 写完，用户同日审阅原样通过【已确认】用户 2026-10-23。和 PLAN.md 的出入已回填：§8 表格的三处（`prompt-<n>.md`、仓库级 `active.lock`、`cancel.request`），以及 §11.3 的接口签名（`start` 返回 `turn`、`attach` 用 `sinceCursor`、事件由 `onEvent` 回调收、加 `question` 和 `warning`）；§7.1 补了 `dsh-bridge/lib/jsonrpc.js`（实现决定 1 的“客户端和桥接各一份”）。起草 S3 时发现契约没法告诉运行时设计端是谁，给 `run start` 补了 `--designer`、`--designer-model`，用户同意【已确认】用户 2026-10-23。
+- 2026-10-23 S2、S3 任务书定稿，待用户按顺序派发。
+- 2026-10-23 S2 验收：AC1–AC5、AC7 通过，AC6、AC8 各有一处不符，另有一个严重问题，写成返工任务书 [briefs/1a-s2-rework.md](briefs/1a-s2-rework.md)，用户同日派发。【已验证】2026-10-23，Claude 重跑 `npm test`（77/77）、`npm run build`（默认输出 `dist/` 和 `--out` 都对，包内恰好 6 个文件，不往仓库写文件），外层 bwrap 下 `bridge-dsh.mjs` 和 `acp-client-dsh.mjs` 都是 `RESULT: 通过`；`~/.dsh/profiles` 哈希和文件清单、用户 dsh Web 的 PID 与派发前一致；会话日志显示派发前已切到 `workspace-write`，全程没有审批请求，命令里没有读写真实 `~/.dsh` 或 `.env`、按名字结束进程或提交。
+  - 要返工：`truncateText` 耗时随长度平方增长（实测 128 KiB 777 ms，桥接在 dsh Web 进程里，大输出会卡住 Web）；`acp-server.js` 直接调用 dsh 的 agent、session 对象（含已被 dsh 标为禁用的 `eventAt`），不符合“dsh 调用只在 dsh-api.js”；集成测试从 `experiments/` 导入，任务书要求复制；同一进程里重连后补发的 `stoppedBy` 变成 `null`，protocol.md §2.7 只允许桥接重启后这样。
+  - 回填（2026-10-23 Claude 已起草进 PLAN.md §5.2、§5.4、§7.1、§9.3、§9.4、§11.9，protocol.md §2.5、§2.7，RISKS.md R8，用户审阅 diff 后原样通过【已确认】用户 2026-10-23）：PLAN.md §5.2、§11.9 的“默认没有 `read-only` 预设”与 dsh 0.2.1-rc.2 不符（dsh-base 默认表有 `read-only`，Claude 已在 dsh 源码核对）；protocol.md §2.7 的 `assistant/chunk` 改为 `assistant/message` 的内容块（整条消息一次转发，不是逐字流式）、只转发 `source.kind` 为 `user` 的 `user/message`、用量字段、`endReason` 取值、`stoppedBy` 由桥接按连接状态判定；dsh 版本范围用 `peerDependencies` 加 `optional: true`（dsh 汇报离线安装不下载 dsh，profile 带 `autoInstallPeers=false`）；`session.eventAt` 被 dsh 标为禁用，记入 RISKS.md。
+- 2026-10-23 S2 返工验收：RW1–RW5 全部通过，S2 完成。【已验证】2026-10-23，Claude 重跑 `npm test`（80/80）和 `npm run build`（包内 6 个文件），外层 bwrap 下 `bridge-dsh.mjs`、`acp-client-dsh.mjs` 都是 `RESULT: 通过`，`grep -rn "experiments/" tests/` 无输出，`lib/jsonrpc.js` 仍与 `core/jsonrpc.mjs` 相同；新截断函数和逐字符参考实现对照 3000 组随机多字节文本无差异，16 MiB 表情文本截断 25 ms、无 U+FFFD；在临时副本里往 `acp-server.js` 加 6 种违规写法（`state.agent.followup`、`this.agent.session.seq`、方括号访问、经别名调用 `followup`、`state.session.append`、`ctx.get`），自动检查都能查出；`~/.dsh/profiles` 哈希、文件清单和用户 dsh Web 的 PID 与返工前一致，会话日志里返工轮次没有权限变化，命令里没有读写真实 `~/.dsh` 或 `.env`、按名字结束进程或提交。
+  - 小出入，不返工：一个连接 `session/close` 后另一个连接再 `session/resume`，会话仍带着“已关闭”标记，这个连接断开时状态会被丢掉；运行时一个任务只有一个连接，暂不影响。自动检查查不出解构后再调用的写法（dsh 已说明）。

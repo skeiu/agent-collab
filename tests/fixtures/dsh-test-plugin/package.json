@@ -1,0 +1,17 @@
+{
+  "name": "dsh-test-observer",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "cordis.patch.yml"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "description": "dsh 桥接集成测试专用插件：应答审批、按控制文件取消会话并报告工作区"
+}

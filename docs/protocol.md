@@ -2,7 +2,7 @@
 
 # 接口契约
 
-> 状态：S0 草稿，Claude 2026-10-23 起草，【待核实】等用户审阅。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。
+> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。
 
 ## 通用约定
 
@@ -116,7 +116,7 @@
 
 ### 2.5 `session/prompt`、`session/cancel`、`session/set_config_option`、`session/close`
 
-- `session/prompt`：prompt 只用 `text` 内容块（参考图由执行端按任务书自己用 `read_image` 读）。等根会话和所有子任务都结束才返回。返回标准的 `stopReason`，加 `_meta.agentCollab`：`{ endReason, stoppedBy }`，`endReason` 是 dsh `turn/end` 的 `reason.kind` 原值【未验证】，`stoppedBy` 是 `client`（因本连接的 `session/cancel` 结束）、`human`（在 dsh Web 里被停止）或 `null`。
+- `session/prompt`：prompt 只用 `text` 内容块（参考图由执行端按任务书自己用 `read_image` 读）。等根会话和所有子任务都结束才返回。返回标准的 `stopReason`，加 `_meta.agentCollab`：`{ endReason, stoppedBy }`，`endReason` 是 dsh `turn/end` 的 `reason.kind` 原值：`completed`、`aborted`、`blocked`、`error`、`max-tokens`（崩溃恢复和 fork 时还有 `interrupted`、`forked`，补发历史时可能出现）【已验证】2026-10-23，S2 实测并核对 dsh 类型定义。`stoppedBy` 是 `client`（因本连接的 `session/cancel` 结束）、`human`（在 dsh Web 里被停止）或 `null`（不是被停止的）。dsh 的事件分不清这两种停止，都是 `reason: { kind: "aborted", reason: { kind: "user" } }`，所以由桥接判断：本连接发过 `session/cancel` 后以 `aborted` 结束的为 `client`，否则以 `aborted` 结束的为 `human`。`stopReason` 按 `endReason` 换算：`max-tokens` → `max_tokens`，`aborted`、`interrupted` → `cancelled`，其余 → `end_turn`。
 - `session/cancel`：标准通知。
 - `session/set_config_option`：只支持 `model`、`reasoning_effort` 两个配置项。字段按 ACP SDK：`configId`（配置项名）、`value`（字符串），不是 `optionId`【已验证】2026-10-23，S1 核对 dsh 自带的 `@agentclientprotocol/sdk` 1.4.0。
 - `session/close`：释放桥接持有的引用，不删除会话，返回 `{}`。
@@ -139,18 +139,18 @@
 
 | dsh 事件 | `sessionUpdate` | 备注 |
 |---|---|---|
-| 思考内容 | `agent_thought_chunk` | |
-| `assistant/chunk`、`assistant/message` 的文字 | `agent_message_chunk` | |
+| `assistant/message` 里 `type: "reasoning"` 的内容块 | `agent_thought_chunk` | 每块一条 |
+| `assistant/message` 里 `type: "text"` 的内容块 | `agent_message_chunk` | 每块一条，不截断。dsh 0.2.1-rc.2 没有 `assistant/chunk` 事件；逐字增量只在 `agent/assistant-stream` 里，桥接不转发，所以文字按整条消息到达【已验证】2026-10-23，S2 实测 |
 | `tool/call` | `tool_call` | `toolCallId` 用 dsh 的 `callId`，`rawInput` 截断 |
 | `tool/result` | `tool_call_update` | `status` 为 `completed` 或 `failed`，输出截断 |
-| `user/message` | `user_message_chunk` | **只转发不是经本桥接发出的消息**，并带 `_meta.agentCollab.source: "dsh-web-human"`；经 `session/prompt` 发出的消息不回显 |
+| `user/message` | `user_message_chunk` | **只转发人在 dsh Web 里发的消息**，即 `source.kind` 为 `user` 的；并带 `_meta.agentCollab.source: "dsh-web-human"`。经 `session/prompt` 发出的消息不回显；dsh 自己注入的运行时上下文、时间等也是 `user/message`，`source.kind` 不同，不转发【已验证】2026-10-23，S2 实测 |
 
 **扩展通知 `_agentCollab/status`**，参数 `{ sessionId, kind, ...字段, _meta: { agentCollab: { seq, sub, at } } }`：
 
 | `kind` | 字段 | 来源 |
 |---|---|---|
 | `turn_start` | — | `turn/start` |
-| `usage` | `usage: { input, output, cacheRead, cacheWrite }`，拿不到的为 `null` | 每一步结束时的用量【未验证：dsh 事件里的字段名】 |
+| `usage` | `usage: { input, output, cacheRead, cacheWrite }`，拿不到的为 `null` | `assistant/message` 的 `data.usage`，每条助手消息（每一步）一次；dsh 字段 `inputTokens`、`outputTokens`、`cacheReadTokens`、`cacheWriteTokens` 依次对应（另有 `totalTokens`、`reasoningTokens`，不转发）【已验证】2026-10-23，S2 实测 |
 | `turn_end` | `endReason`、`stoppedBy` | `turn/end`；`stoppedBy` 同 2.5。PLAN.md §9.3 的 `stopped_by_human` 就是 `stoppedBy: "human"` |
 | `approval_pending` | `approvalId`、`toolName`、`callId`、`reason` | `approval/asked` |
 | `approval_resolved` | `approvalId`、`outcome`（dsh 原值，如 `allowed-once`、`rejected`） | `approval/decided` |
@@ -158,7 +158,7 @@
 | `question_resolved` | `callId` | 同一 `callId` 的 `tool/result` |
 | `error` | `message`、`code`（可选） | `agent/error` 或桥接自身的错误 |
 
-限制：桥接重启后，补发的历史 `turn_end` 分不清是谁停止的，`stoppedBy` 为 `null`。
+桥接进程活着期间，它 `session/new` 或 `session/resume` 过的会话即使没有客户端连着也继续跟踪，补发的 `turn_end` 和实时通知的 `stoppedBy` 相同；只有 `session/close` 后才丢弃这些状态。限制：桥接重启后，补发的历史 `turn_end` 分不清是谁停止的，`stoppedBy` 为 `null`。
 
 ## 3. 执行端适配器接口（`core/adapters/*.mjs`）
 
@@ -243,7 +243,7 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 | `cancel.request` | `run cancel` | 存在即表示要求取消，内容 `{ v, at }`；工作进程定期检查。用文件而不是信号，各平台通用 |
 | `worker.log` | 工作进程 | 纯文本日志 |
 
-和 PLAN.md §8 表格的出入：原表的 `correction-<轮次>.md` 改为 `prompt-<n>.md`，因为续接的消息不只有问题单，还有对 `blocked` 的答复和重发汇报的要求；原表任务目录里的 `lock` 改为仓库级的 `active.lock`；新增 `cancel.request`。
+PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里的 `lock`，2026-10-23 已按本节改为 `prompt-<n>.md`、仓库级的 `active.lock`，并加上 `cancel.request`：续接的消息不只有问题单，还有对 `blocked` 的答复和重发汇报的要求。
 
 ### 5.4 轮次
 
@@ -306,7 +306,7 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 
 | 命令 | 参数 | 成功时的输出 |
 |---|---|---|
-| `run start` | `--brief <文件>`、`--title <任务名>`、`--executor <名称>`（可选）、`--protected <路径>`（可重复，与配置里的 `protectedPaths` 合并）、`--image <文件>`（可重复）、`--set <键>=<JSON 值>`（可重复，单个任务级配置） | `{ ok, runId, runDir, status: "starting", workerPid }`，立即返回 |
+| `run start` | `--brief <文件>`、`--title <任务名>`、`--designer <名称>`（可选，skill 按设计端渲染时写死，如 `claude`；用来选默认执行端和记录 `designer`）、`--designer-model <模型>`（可选）、`--executor <名称>`（可选；没有它也没有 `--designer` 时报用法错误）、`--protected <路径>`（可重复，与配置里的 `protectedPaths` 合并）、`--image <文件>`（可重复）、`--set <键>=<JSON 值>`（可重复，单个任务级配置） | `{ ok, runId, runDir, status: "starting", workerPid }`，立即返回 |
 | `run wait <任务号>` | `--timeout <秒>`（可选） | 任务进入“停下”或“结束”状态时返回 `{ ok, runId, status, statusReason, summaryFile, patchFile, reportFile }`；超时返回 `{ ok, runId, status, timedOut: true }`，退出码 0 |
 | `run status [任务号]` | `--all`（所有仓库） | 有任务号：`{ ok, run: <state.json>, workerAlive }`；没有：`{ ok, runs: [{ runId, repoRoot, status, turn, updatedAt, workerAlive }] }`，只列未“结束”的任务 |
 | `run resume <任务号>` | `--message <文件>`、`--kind correction \| answer` | `{ ok, runId, turn, status: "starting", workerPid }` |

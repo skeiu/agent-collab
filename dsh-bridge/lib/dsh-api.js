@@ -1,0 +1,444 @@
+// 本文件：桥接访问 dsh 内部服务的唯一入口。所有 ctx、dsh 服务对象和内部事件订阅都集中在这里；dsh 升级时只改这一个文件。
+
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+/** 本桥接实测并支持的 dsh 版本范围（含下限，不含下一个次版本）。 */
+export const SUPPORTED_DSH_RANGE = '>=0.2.1-rc.2 <0.3.0';
+
+const DSH_PACKAGE_NAME = '@deepseek-ai/dsh';
+
+function parseVersion(text) {
+  if (typeof text !== 'string') return null;
+  const match = /^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/.exec(text.trim());
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] === undefined ? [] : match[4].split('.'),
+  };
+}
+
+function compareIdentifiers(a, b) {
+  const aNumber = /^\d+$/.test(a);
+  const bNumber = /^\d+$/.test(b);
+  if (aNumber && bNumber) return Number(a) - Number(b);
+  if (aNumber) return -1;
+  if (bNumber) return 1;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+function comparePrerelease(a, b) {
+  if (a.length === 0 && b.length === 0) return 0;
+  if (a.length === 0) return 1;
+  if (b.length === 0) return -1;
+  const length = Math.max(a.length, b.length);
+  for (let index = 0; index < length; index += 1) {
+    if (a[index] === undefined) return -1;
+    if (b[index] === undefined) return 1;
+    const result = compareIdentifiers(a[index], b[index]);
+    if (result !== 0) return result;
+  }
+  return 0;
+}
+
+function compareVersions(a, b) {
+  for (const key of ['major', 'minor', 'patch']) {
+    if (a[key] !== b[key]) return a[key] - b[key];
+  }
+  return comparePrerelease(a.prerelease, b.prerelease);
+}
+
+/** dsh 版本是否在支持范围内；版本无法解析时按不支持处理。 */
+export function isDshVersionSupported(version) {
+  const parsed = parseVersion(version);
+  if (!parsed) return false;
+  return compareVersions(parsed, parseVersion('0.2.1-rc.2')) >= 0
+    && compareVersions(parsed, parseVersion('0.3.0')) < 0;
+}
+
+function readPackageVersion(file) {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(file, 'utf8'));
+    return manifest && manifest.name === DSH_PACKAGE_NAME && typeof manifest.version === 'string'
+      ? manifest.version
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function resolveDshVersion(ctx) {
+  const packages = ctx.get('pluginPackages');
+  if (packages !== undefined && typeof packages.packageOf === 'function') {
+    for (const parentURL of [import.meta.url, ctx.baseUrl].filter(Boolean)) {
+      try {
+        const found = packages.packageOf(DSH_PACKAGE_NAME, parentURL);
+        if (found && typeof found.version === 'string') return found.version;
+      } catch {
+        // 继续尝试下一个解析基准。
+      }
+    }
+  }
+  // 兜底：从启动 dsh 的入口文件向上找 dsh 自己的 package.json。
+  const entry = process.argv[1];
+  if (typeof entry === 'string' && entry.length > 0) {
+    const direct = readPackageVersion(path.join(path.dirname(entry), '..', 'package.json'));
+    if (direct) return direct;
+    const sameLevel = readPackageVersion(path.join(path.dirname(entry), 'package.json'));
+    if (sameLevel) return sameLevel;
+  }
+  return null;
+}
+
+function resolveHomeDir(ctx) {
+  const resolveHome = ctx.get('dshHomePath');
+  if (typeof resolveHome === 'function') {
+    try {
+      const value = resolveHome();
+      if (typeof value === 'string' && value.length > 0) return value;
+    } catch {
+      // 交给兜底。
+    }
+  }
+  const fromEnv = process.env.DSH_HOME;
+  return typeof fromEnv === 'string' && fromEnv.trim().length > 0 ? fromEnv : null;
+}
+
+function resolveProfileName(ctx) {
+  try {
+    if (typeof ctx.baseUrl === 'string' && ctx.baseUrl.length > 0) {
+      const directory = fileURLToPath(new URL('.', ctx.baseUrl));
+      const name = path.basename(directory.replace(/[\\/]+$/, ''));
+      if (name.length > 0) return name;
+    }
+  } catch {
+    // 无法从 baseUrl 推导时返回 null，由发现文件带 problem。
+  }
+  return null;
+}
+
+function selectionOf(value) {
+  if (!value || typeof value !== 'object') return null;
+  if (typeof value.provider !== 'string' || typeof value.model !== 'string') return null;
+  return {
+    provider: value.provider,
+    model: value.model,
+    ...typeof value.reasoningEffort === 'string' && value.reasoningEffort.length > 0
+      ? { reasoningEffort: value.reasoningEffort }
+      : {},
+  };
+}
+
+async function loadModelSelectionInstaller() {
+  try {
+    const module = await import('@deepseek-ai/dsh-agent');
+    return typeof module.installModelSelection === 'function' ? module.installModelSelection : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 创建桥接使用的 dsh 服务门面。
+ * @param {object} ctx cordis 插件上下文
+ * @returns {object} 只暴露桥接需要的动作，不暴露 ctx 本身
+ */
+export function createDshApi(ctx) {
+  const homeDir = resolveHomeDir(ctx);
+  const profileName = resolveProfileName(ctx);
+  const dshVersion = resolveDshVersion(ctx);
+
+  const api = {
+    homeDir,
+    profileName,
+    dshVersion,
+    supportedRange: SUPPORTED_DSH_RANGE,
+
+    /** 当前 profile 是否有 Web 的 workspaceRegistry；没有就不启动监听。 */
+    isWebProfile() {
+      return ctx.get('workspaceRegistry') !== undefined;
+    },
+
+    getWebUrl() {
+      try {
+        const webApp = ctx.get('webApp');
+        return webApp && typeof webApp.getAdvertisedUrl === 'function' ? webApp.getAdvertisedUrl() : null;
+      } catch {
+        return null;
+      }
+    },
+
+    async listAgentPresets() {
+      const service = ctx.get('agentPresets');
+      if (service === undefined) return null;
+      try {
+        return await service.list();
+      } catch {
+        return null;
+      }
+    },
+
+    async readPresetDocument(id) {
+      const service = ctx.get('agentPresets');
+      if (service === undefined || typeof service.readDocument !== 'function') return null;
+      try {
+        const document = await service.readDocument(id);
+        return document && typeof document.content === 'string' ? document.content : null;
+      } catch {
+        return null;
+      }
+    },
+
+    async mountAgentPreset(agentCtx, id) {
+      const service = ctx.get('agentPresets');
+      if (service === undefined || typeof service.mount !== 'function') {
+        throw new Error('agentPresets service is unavailable');
+      }
+      return service.mount(agentCtx, id);
+    },
+
+    async createAgent(options) {
+      const wrapped = { ...options };
+      if (typeof options.setup === 'function') {
+        wrapped.setup = (agentCtx, agent) => options.setup(agentCtx, viewOf(agent));
+      }
+      const handle = await ctx.agents.create(wrapped);
+      const result = { view: viewOf(handle.agent) };
+      if (typeof handle.dispose === 'function') result.dispose = handle.dispose.bind(handle);
+      return result;
+    },
+
+    async resumeAgent(options) {
+      const wrapped = { ...options };
+      if (typeof options.setup === 'function') {
+        wrapped.setup = (agentCtx, agent) => options.setup(agentCtx, viewOf(agent));
+      }
+      const handle = await ctx.agents.resume(wrapped);
+      const result = { view: viewOf(handle.agent) };
+      if (typeof handle.dispose === 'function') result.dispose = handle.dispose.bind(handle);
+      return result;
+    },
+
+    getAgent(id) {
+      const agent = ctx.agents.get(id);
+      return agent === undefined ? undefined : viewOf(agent);
+    },
+
+    getDefaultModelSelection() {
+      const service = ctx.get('agentDefaultModel');
+      if (service === undefined || typeof service.currentSelection !== 'function') return null;
+      try {
+        return selectionOf(service.currentSelection());
+      } catch {
+        return null;
+      }
+    },
+
+    async setSessionTitle(session, title) {
+      const service = ctx.get('sessionTitle');
+      if (service === undefined || typeof service.rename !== 'function') return;
+      try {
+        service.rename(session, title);
+      } catch {
+        // 标题只是展示信息，失败不影响会话。
+      }
+    },
+
+    async attachWorkspace(cwd, title, sessionId) {
+      const registry = ctx.get('workspaceRegistry');
+      if (registry === undefined) return null;
+      const workspace = await registry.create(cwd, title);
+      await workspace.attachSession(sessionId);
+      return workspace.id;
+    },
+
+    registerSessionEnv(agentCtx, agent, env) {
+      if (!env || Object.keys(env).length === 0) return;
+      const service = agentCtx.get('shellEnv');
+      if (service === undefined || typeof service.register !== 'function') return;
+      const variables = {};
+      for (const key of Object.keys(env)) variables[key] = { description: 'agent-collab executor environment' };
+      service.register({
+        name: 'agent-collab-' + agent.id,
+        variables,
+        resolve: (execution) => execution.agent === agent ? { ...env } : {},
+      });
+    },
+
+    async listPermissionPresetSpecs() {
+      const service = ctx.get('permissionPresets');
+      if (service === undefined) return [];
+      let catalog;
+      try {
+        catalog = service.catalog();
+      } catch {
+        return [];
+      }
+      const specs = [];
+      for (const option of catalog && Array.isArray(catalog.defaultOptions) ? catalog.defaultOptions : []) {
+        try {
+          const spec = service.resolve(option.value);
+          specs.push({ name: option.value, sandbox: spec.sandbox, approval: spec.approval });
+        } catch {
+          // 跳过无法解析的条目。
+        }
+      }
+      return specs;
+    },
+
+    setPermissionPreset(session, name) {
+      const service = ctx.get('permissionPresets');
+      if (service === undefined || typeof service.set !== 'function') {
+        throw new Error('permissionPresets service is unavailable');
+      }
+      service.set(session, name);
+    },
+
+    setSandboxMode(session, mode) {
+      session.append('sandbox/mode', { mode });
+    },
+
+    setApprovalPolicy(session, policy) {
+      session.append('approval/policy', { policy });
+    },
+
+    async applyPermission(session, mapped) {
+      const specs = await api.listPermissionPresetSpecs();
+      const match = specs.find((spec) => spec.sandbox === mapped.sandbox && spec.approval === mapped.approval);
+      if (match !== undefined) {
+        api.setPermissionPreset(session, match.name);
+        return { ...mapped, presetName: match.name };
+      }
+      api.setSandboxMode(session, mapped.sandbox);
+      api.setApprovalPolicy(session, mapped.approval);
+      return { ...mapped, presetName: null };
+    },
+
+    async permissionSnapshot(session, mapped) {
+      const specs = await api.listPermissionPresetSpecs();
+      const match = specs.find((spec) => spec.sandbox === mapped.sandbox && spec.approval === mapped.approval);
+      return { ...mapped, presetName: match === undefined ? null : match.name };
+    },
+
+    async waitForChildren(agent) {
+      const service = ctx.get('subagents');
+      if (service === undefined || typeof service.waitForChildren !== 'function') return false;
+      return service.waitForChildren(agent);
+    },
+
+    async listModels() {
+      const llm = ctx.get('llm');
+      if (llm === undefined || typeof llm.listProviders !== 'function') return [];
+      const models = [];
+      let providers = [];
+      try {
+        providers = llm.listProviders();
+      } catch {
+        return [];
+      }
+      for (const provider of providers) {
+        try {
+          const entries = await llm.listModels(provider.id);
+          for (const entry of entries) {
+            models.push({
+              provider: provider.id,
+              model: entry.id,
+              displayName: entry.name || entry.id,
+              ...Array.isArray(entry.inputModalities) ? { inputModalities: [...entry.inputModalities] } : {},
+            });
+          }
+        } catch {
+          // 该提供方目录不可用时跳过，其余提供方仍然可用。
+        }
+      }
+      return models;
+    },
+
+    async resolveModelInfo(provider, model) {
+      const llm = ctx.get('llm');
+      if (llm === undefined || typeof llm.resolveModelInfo !== 'function') return null;
+      try {
+        return await llm.resolveModelInfo(provider, model);
+      } catch {
+        return null;
+      }
+    },
+
+    /** 模型选择控制器；installModelSelection 在目标 dsh 上不可用时退化为不可切换。 */
+    async createModelControl(initial) {
+      const install = await loadModelSelectionInstaller();
+      let selected = selectionOf(initial) ?? undefined;
+      const reference = {
+        get current() {
+          return selected;
+        },
+        set current(value) {
+          selected = selectionOf(value) ?? undefined;
+        },
+        assembled: undefined,
+      };
+      return {
+        install(agentCtx) {
+          if (install !== null) install(agentCtx, reference);
+        },
+        get() {
+          return selected === undefined ? null : { ...selected };
+        },
+        set(value) {
+          selected = selectionOf(value) ?? undefined;
+        },
+      };
+    },
+
+    onSessionEvent(listener) {
+      return ctx.on('session/event', (session, event) => {
+        if (session && typeof session.id === 'string') listener(session.id, event);
+      }, { global: true });
+    },
+
+    onAgentError(listener) {
+      return ctx.on('agent/error', (payload) => {
+        const agent = payload && payload.agent;
+        listener(agent && typeof agent.id === 'string' ? agent.id : undefined, payload && payload.error);
+      }, { global: true });
+    },
+  };
+
+  const viewCache = new WeakMap();
+
+  /** dsh agent/session 的包装视图；只暴露桥接需要的方法，不暴露底层对象。方法名刻意避开 seq/status 等 dsh 成员名，便于静态检查。 */
+  function viewOf(agent) {
+    const cached = viewCache.get(agent);
+    if (cached !== undefined) return cached;
+    const session = agent.session;
+    const view = {
+      id: agent.id,
+      sessionId: session.id,
+      currentSeq() { return session.seq; },
+      readEvent(index) { return session.eventAt(index); },
+      currentStatus() { return agent.status; },
+      submit(message) { return agent.followup(message); },
+      waitIdle() { return agent.whenIdle(); },
+      stop(cause) { return agent.cancel(cause); },
+      cwd() {
+        return session.header && typeof session.header.cwd === 'string' ? session.header.cwd : null;
+      },
+      agentPreset() {
+        return session.header && typeof session.header.agentPreset === 'string' ? session.header.agentPreset : null;
+      },
+      readRequestHeader() { return session.requestHeader(); },
+      setTitle(title) { return api.setSessionTitle(session, title); },
+      applyPermission(mapped) { return api.applyPermission(session, mapped); },
+      permissionSnapshot(mapped) { return api.permissionSnapshot(session, mapped); },
+      registerEnv(agentCtx, env) { return api.registerSessionEnv(agentCtx, agent, env); },
+      waitForChildren() { return api.waitForChildren(agent); },
+    };
+    viewCache.set(agent, view);
+    return view;
+  }
+
+  return api;
+}

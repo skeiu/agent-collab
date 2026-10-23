@@ -126,8 +126,8 @@
 
 - 权限模式由环境变量 `DSH_PERMISSION_MODE` 控制，可选 `read-only`、`workspace-write`（默认）、`danger-full-access`。前两种模式下，超出范围的操作需要人批准；最后一种不做限制，也不弹审批。
 - 会话的权限由两个开关组成：沙箱（`read-only` / `workspace-write` / `danger-full-access`）和审批策略（`ask` 交给人或其他应答者，`never` 直接拒绝）。
-  - dsh 的"权限预设"（`dsh-permission-presets`）只是给开关组合起名字的一张表，默认只有两项：`workspace-write`（沙箱 workspace-write + 审批 ask）和 `danger-full-access`（沙箱 danger-full-access + 审批 never）。
-  - **默认没有 `read-only` 预设**，用户也可以改这张表。开关组合不匹配任何预设时，Web 里显示为 `custom`。
+  - dsh 的"权限预设"（`dsh-permission-presets`）只是给开关组合起名字的一张表，0.2.1-rc.2 的默认表（`dsh-base` 的 bundle 补丁）有三项：`read-only`（沙箱 read-only + 审批 ask）、`workspace-write`（沙箱 workspace-write + 审批 ask）和 `danger-full-access`（沙箱 danger-full-access + 审批 never）。【已验证】2026-10-23，S2 集成测试在临时 profile 里拿到 `read-only`，Claude 核对 dsh 源码。
+  - 用户可以改这张表，所以不能假定哪个名字存在。开关组合不匹配任何预设时，Web 里显示为 `custom`。
 - 每次审批都会在会话日志里记两条事件：`approval/asked`（发出请求）和 `approval/decided`（结果）。
 - `workspace-write`：只能写工作区和临时目录；**网络不受限**；家目录只读，所以写 `~/.npm`、`~/.cache` 这类缓存会失败。可以通过环境变量把缓存重定向到临时目录或工作区内。
 - 各平台的隔离方式：
@@ -152,8 +152,8 @@
 | 服务 | 用法 |
 |---|---|
 | `agents` | `create({ sessionId, meta: { cwd, agentPreset? }, agentOptions, setup })`、`resume({ resumeSessionId, agentOptions, setup })`、`get(id)` |
-| agent | `followup(createUserMessage(...))` 发消息，`whenIdle()` 等空闲，`cancel({ kind: 'user' })` 取消，`status`，`session.seq` / `session.eventAt(seq)` |
-| 事件 | `ctx.on('session/event', (session, event) => …)`，事件类型有 `turn/start`、`user/message`、`assistant/message`、`assistant/chunk`、`tool/call`、`tool/result`、`turn/end`；`ctx.on('agent/assistant-stream', …)` 推送逐字的思考内容；`ctx.on('agent/error', …)` |
+| agent | `followup(createUserMessage(...))` 发消息，`whenIdle()` 等空闲，`cancel({ kind: 'user' })` 取消，`status`，`session.seq` / `session.eventAt(seq)`。dsh 的 dsh-session 文档把 `eventAt`、`snapshotEvents` 标为“新的生产代码禁止调用”，桥接目前仍用 `eventAt` 补发（风险见 [RISKS.md](context/RISKS.md) R8） |
+| 事件 | `ctx.on('session/event', (session, event) => …)`，事件类型有 `turn/start`、`user/message`、`assistant/message`、`tool/call`、`tool/result`、`turn/end`；`ctx.on('agent/assistant-stream', …)` 推送逐字的增量（`frame.chunk.type` 为 `text-delta`、`reasoning-delta`）；`ctx.on('agent/error', …)`。实测（S2，0.2.1-rc.2）：没有 `assistant/chunk` 事件（旧格式，只在迁移代码里出现），回复文字和思考是 `assistant/message` 的 `data.message.content` 里 `type` 为 `text`、`reasoning` 的块，用量在同一事件的 `data.usage`（`inputTokens`、`outputTokens`，可选 `totalTokens`、`cacheReadTokens`、`cacheWriteTokens`、`reasoningTokens`）；dsh 会把运行时上下文、时间等也作为 `user/message` 注入，人发的消息是 `source.kind` 为 `user` 的那些；`turn/end` 的 `reason.kind` 有 `completed`、`aborted`、`blocked`、`error`、`max-tokens`，崩溃恢复和 fork 时还有 `interrupted`、`forked`；人在 Web 里停止和插件调用 `cancel({ kind: 'user' })` 产生的 `turn/end` 相同，都是 `{ kind: 'aborted', reason: { kind: 'user' } }` |
 | `agentPresets` | `mount(agentCtx, id)`。**dsh Web 禁用了全局工具，bash、读写文件等都挂在工具预设后面，不挂预设的会话一个工具都没有。** 内置预设有 `standard`、`ptc`、`minimal`、`cordis`（实测）。`mount` 是异步方法，返回 `{ id }`。**`agents.create` 不会自动挂预设**（dsh Web 自己的会话控制器是在 setup 里调用 `mount`），桥接必须在 setup 里显式调用。新增工具预设的方式，是在 bundle 补丁里插入一行 `@deepseek-ai/dsh-agent-preset`，写出完整的插件列表（没有继承或派生语法，见 9.5） |
 | `permissionPresets` | `set(session, name)`：按预设名同时设沙箱和审批，名字不在预设表里会报错。要设表里没有的组合（比如只读），直接用 `dsh-sandbox-policy` 的 `setSandboxMode(session, mode)` 和审批服务的 `setApprovalPolicy(session, policy)` |
 | `workspaceRegistry` | `create(path, title)` 返回工作区；同一路径重复调用会复用已有工作区（id 不变，title 沿用第一次的），不会报错。再调工作区对象的 `attachSession(sessionId)`（方法在工作区上，不在 registry 上），会话就挂到 dsh Web 侧栏对应工作区下。只有 web 组合包里有这个服务，要用 `ctx.get('workspaceRegistry')` 按需获取，不能写进 `inject`，否则在其他 profile 里插件会起不来 |
@@ -284,11 +284,12 @@ agent-collab/
 │   ├── config.html                从 schema 自动生成的配置表单
 │   └── dashboard.html             任务看板
 ├── dsh-bridge/                    dsh Web 插件（纯 JS，不需要构建步骤），打包成 .tgz 随运行时分发
-│   ├── package.json               声明 dsh.bundle.patch，peerDependencies 写明支持的 dsh 版本；没有需要联网下载的依赖（见 9.4）
+│   ├── package.json               声明 dsh.bundle.patch，peerDependencies 写明支持的 dsh 版本并标为可选；没有需要联网下载的依赖（见 9.4）
 │   ├── cordis.patch.yml           插入桥接插件，以及 agent-collab 工具预设（见 9.5）
 │   └── lib/
 │       ├── index.js               cordis 插件入口：监听端口、发令牌、管理连接
 │       ├── acp-server.js          ACP 方法实现
+│       ├── jsonrpc.js             与 core/jsonrpc.mjs 内容相同的一份（桥接装进 dsh profile 后拿不到 core/），由测试保证两份一致
 │       └── dsh-api.js             所有 dsh 内部服务调用都集中在这一个文件
 ├── scripts/build.mjs              生成 skills/collab/SKILL.md、打包桥接 .tgz、组装运行时
 ├── tests/                         单元测试（用假的 dsh 和执行端，node --test 运行）；fixtures/ 放假对端；integration/ 放要真 dsh 的集成测试脚本，单独运行
@@ -393,11 +394,13 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
 
 各文件的字段格式见 [protocol.md](protocol.md)。
 
+任务锁（D23）放在仓库这一级：`runs/<仓库标识>/active.lock`，不在任务目录里，这样看本仓库有没有任务在跑只需看一个文件。
+
 | 文件 | 内容 |
 |---|---|
 | `state.json` | 当前状态、工作进程 pid、执行端会话 id、收到的最后一个事件序号、返工轮次 |
-| `lock` | 运行中的锁（D23） |
-| `brief.md`、`correction-<轮次>.md` | 任务书和各轮问题单 |
+| `brief.md`、`prompt-<轮次>.md` | 任务书（第 1 轮），以及之后每轮发给执行端的消息：问题单、对 `blocked` 的答复、要求重发汇报 |
+| `cancel.request` | `collab run cancel` 写入，表示要求取消，工作进程定期检查；用文件而不是信号，各平台通用 |
 | `baseline.json` | 基线快照的 tree id，以及当时的 HEAD 和分支（D21） |
 | `events.jsonl` | 统一格式的事件流（11.3） |
 | `report-<轮次>.json` | 每轮提取出的汇报 |
@@ -452,14 +455,15 @@ skill 设置 `disable-model-invocation: true`，只有用户手动输入才会�
   - `turn_end` 及原因
   - 审批状态：`approval_pending` / `approval_resolved`，来自会话日志里的 `approval/asked`、`approval/decided` 事件（5.2）。实测：通过 `ctx.on('session/event')` 能收到这对事件，两者用同一个 `id` 配对；`approval/asked` 带 `id`、`toolName`、`callId`、`reason`，`approval/decided` 带 `id`、`outcome`（如 `allowed-once`、`rejected`）。等待审批期间 `agent.status` 仍是 `running`，不能据此判断；桥接按“已 asked、未 decided”自己维护待审批集合
   - 提问状态：`question_pending`，执行端调用了 `ask_user_question` 时发出（见 9.5）。实测：以 `ask_user_question` 的 `tool/call` 事件为准，它带 `callId` 和完整的问题；`user-questions/request` 也带问题但不带 `callId`；`standard` 预设下的提问是阻塞模式，`userQuestions` 的投影里看不到待答问题
-  - 用户在 Web 里停止了任务：`stopped_by_human`
+  - 用户在 Web 里停止了任务：`stopped_by_human`。dsh 的事件分不清“人在 Web 里停止”和“本连接取消”（5.4），由桥接判断：本连接发过 `session/cancel` 后以 `aborted` 结束的算客户端取消，否则算人停止。所以只有桥接进程一直在时才分得清，桥接重启后补发的历史轮次不知道是谁停止的
+- 回复文字按 `assistant/message` 整条转发，不是逐字流式；思考同理。实时查看的粒度是一条消息（一步）
 - **审批**：桥接模式下审批由人在 dsh Web 里处理，桥接**不会**把 `session/request_permission` 发给客户端，只用状态通知告诉客户端有审批在等。等审批期间暂停卡死计时。
   - 实测插件也能用代码应答：注册 `ctx.on('approval/request', (request, next) => …)`，返回 `allowed-once` 或 `rejected`，不处理的交给 `next()`；`ask_user_question` 同理可以监听 `user-questions/request` 并返回答案。本设计不用这个能力：桥接只观察事件，不注册应答者，审批和提问都留给人。以后要做自动审批时，还要先验证它和 dsh Web 自带应答者的先后顺序。
 
 ### 9.4 兼容性和自检
 
-- 所有 dsh 内部服务调用都集中在 `dsh-bridge/lib/dsh-api.js`，dsh 升级后只需要改这一个文件。
-- `package.json` 声明支持的 dsh 版本范围，加载时遇到不支持的版本，在 dsh 日志和发现文件里写明原因。
+- 所有 dsh 内部服务调用都集中在 `dsh-bridge/lib/dsh-api.js`，包括 agent、session 对象上的方法（S2 实现时由 dsh-api 包一层再交给 ACP 服务端），dsh 升级后只需要改这一个文件；单元测试自动检查其他文件没有直接调用。
+- `package.json` 声明支持的 dsh 版本范围，加载时遇到不支持的版本，在 dsh 日志和发现文件里写明原因。声明方式是 `peerDependencies` 加 `peerDependenciesMeta` 的 `optional: true`：pnpm 不会因此去下载 dsh（dsh 的 profile 还设了 `autoInstallPeers=false`）。【已验证】2026-10-23，S2 用离线方式在临时 profile 安装，`node_modules` 里只有桥接。桥接自己也按这个范围判断版本，不依赖 pnpm 的检查。
 - 桥接包除了 dsh 自己提供的服务，不依赖任何需要联网下载的包：ACP 用自写的精简实现（换行分隔的 JSON-RPC 2.0，只实现用到的方法），客户端和桥接各一份，不附带 SDK（1a 定，用户 2026-10-23 确认）；方法和字段以 dsh 依赖里那份 SDK 的类型定义为准核对。这样安装时不用为我们的包联网。实测：pnpm 就绪后安装无依赖的 `.tgz` 不需要联网；但用 corepack 第一次取得 pnpm 时要联网（5.6）。离线机器需要预先装好 pnpm，或预置 corepack 缓存，用户文档要写明。
 - `doctor.mjs --deep` 跑一个最小冒烟：建会话 → 发一句话 → 收到事件 → 正常结束 → 关闭会话。
 - 发布前，在支持范围内的每个 dsh 版本上跑一遍桥接的集成测试。
@@ -526,17 +530,19 @@ dsh 的提问工具叫 `ask_user_question`（`dsh-tool-ask-user`），作为一�
 ### 11.3 执行端适配器的统一接口（`core/adapters/*.mjs`）
 
 ```
-capabilities()                   → { images, structuredOutput, liveView, resume, humanApproval }
-start({ cwd, brief, images, options, env }) → { sessionId }   并开始产生事件
-resume({ sessionId, message })
-attach({ sessionId, sinceSeq })  工作进程重启后，重新接上仍在运行的会话（不支持的执行端返回 false）
+capabilities()                     → { images, structuredOutput, liveView, resume, humanApproval }
+start({ cwd, runId, title, brief, images, options, env })
+                                   → { sessionId, transport, model, turn }   turn 是本轮结束的 Promise
+resume({ sessionId, message })     → { turn }
+attach({ sessionId, sinceCursor }) 工作进程重启后，重新接上仍在运行的会话（不支持的执行端返回 attached: false）
 cancel({ sessionId })
-events                           → 统一格式的异步事件流：
-                                   session / thinking / text / tool_call / tool_result /
-                                   usage / human_message / approval / turn_end / error
+close()
+onEvent(event)                     创建适配器时传入的回调，收到统一格式的事件：
+                                   session / thinking / text / tool_call / tool_result / usage /
+                                   human_message / approval / question / turn_end / warning / error
 ```
 
-`run.mjs` 只认这套统一格式，它负责写 `events.jsonl`、提取汇报、卡死检测和生成 `summary.json`。统一事件的字段见 [protocol.md](protocol.md)。
+`run.mjs` 只认这套统一格式，它负责写 `events.jsonl`、提取汇报、卡死检测和生成 `summary.json`。`sinceCursor` 是适配器自己定义的补发位置（dsh 桥接用事件序号）。签名和统一事件的字段以 [protocol.md](protocol.md) 第 3、4 节为准。
 
 ### 11.4 防止套娃
 
@@ -587,7 +593,7 @@ events                           → 统一格式的异步事件流：
 
 | 级别 | dsh | codex | claude |
 |---|---|---|---|
-| `read-only` | 沙箱 `read-only`。dsh 默认没有同名预设，直接设开关，Web 里显示为 `custom` | `-s read-only` | 只允许读类工具（具体参数待核实） |
+| `read-only` | 预设 `read-only`（沙箱 read-only + 审批 ask，0.2.1-rc.2 默认就有，见 5.2）；用户删掉它时直接设开关，Web 里显示为 `custom` | `-s read-only` | 只允许读类工具（具体参数待核实） |
 | `workspace-write` | 预设 `workspace-write`（沙箱 workspace-write + 审批 ask） | `-s workspace-write` | 允许编辑和指定的命令（权限模式加工具白名单，待核实） |
 | `danger-full-access` | 预设 `danger-full-access`（沙箱 danger-full-access + 审批 never） | `-s danger-full-access` | 跳过所有权限确认（待核实） |
 

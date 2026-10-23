@@ -20,6 +20,7 @@
 | 第 2 批结论回填 | PLAN.md §9.3、§15、§17 按 §17 第 4 项实测结论修改：审批和提问由事件判断；插件虽能用代码应答审批和提问，桥接仍只观察、不注册应答者，审批和提问留给人 | 【已确认】确认人：用户，2026-10-23（审阅 diff 后同意） | [experiments/1a/REPORT.md](../../experiments/1a/REPORT.md) 第 2 批一节 |
 | 第 2 批复用用户网关配置 | 被测 dsh 只读复制真实 web profile 的 `llm-*`、`agent-default-model` 条目，用符号链接让它自己读 `$DSH_HOME/.env`；实验代码和执行端不读密钥 | 【已确认】确认人：用户，2026-10-23 | 被否决的替代方案：本地假模型服务；单独申请测试密钥 |
 | 1a 实现决定 1、2、3、6、7 回填 | PLAN.md §7.1、§9.4、§11.5、§12.1、§12.2 等按 [1a-impl-plan.md](1a-impl-plan.md)“需要用户拍板的实现决定”修改：ACP 自写精简版；acp 覆盖层借用 dsh 安装里的 `yaml` 包解析；字段级接口契约放 `docs/protocol.md`；`core/` 可加辅助模块、不建 `config/defaults.json`；项目级配置不能覆盖权限和执行环境类的项 | 【已确认】确认人：用户，2026-10-23（全部按推荐方案） | 被否决的替代方案见下节 |
+| S2 实测结论回填 | PLAN.md §5.2、§5.4、§7.1、§9.3、§9.4、§11.9 和 protocol.md §2.5、§2.7 按 S2 实测修改：dsh 默认有 `read-only` 权限预设；没有 `assistant/chunk`，文字和思考取自 `assistant/message` 的内容块，按整条消息转发；只转发 `source.kind` 为 `user` 的 `user/message`；用量字段、`endReason` 取值；`stoppedBy` 由桥接按连接状态判定；版本范围用可选的 `peerDependencies`；RISKS.md 加 R8（`eventAt` 被 dsh 标为禁用） | 【已确认】确认人：用户，2026-10-23（审阅 diff 后原样通过） | [1a-impl-plan.md](1a-impl-plan.md)“进展”S2 验收 |
 | 项目级配置只能收紧 4 个安全相关项（决定 7 的补充） | PLAN.md §12.2：`protectedPaths` 取并集，`confirmBeforeDispatch` 取较严，`freshReviewForRisky` 只认 `true`，`commitOnAccept` 只认 `false`；S1 验收审读代码时发现项目文件能清空保护路径、关掉派发前确认 | 【已确认】确认人：用户，2026-10-23 | 被否决的替代方案见下节 |
 
 ## 被否决的替代方案
@@ -46,6 +47,7 @@
 | §17 第 15 项提前做，先做 Windows 桌面版探针：dsh 在 Linux 上写探针并空跑，Windows 上由那台机器的 Claude Code 会话按 README 执行（看侧栏这类界面操作由用户做），这边的 Claude 对照结果文件验收；测试插件允许装进 Windows 上真实的 `desktop` profile，装前备份、做完卸载并核对恢复 | 用户说明那台机器的 dsh 没有任何数据；装插件时桌面版必须完全退出，不能由桌面版里的 dsh 自己跑探针，所以改由 Windows 上的 Claude Code 执行。这边的 Claude 无法在 Windows 上重跑，验收依据是结果文件、截图和用户的回答 | 【已确认】确认人：用户，2026-10-23 |
 | 1a 测试方式：桥接和端到端测试优先用本地假 LLM 服务（1a 实现决定 4） | 第 2 批当时否决过假模型服务，那是针对“验证真实模型会不会调用审批和提问”；1a 实现的测试目标是桥接和运行时的行为，用脚本更可控 | 【已确认】确认人：用户，2026-10-23 |
 | 1a 分工细化：skill 正文、任务书和问题单模板由 Claude 起草，`render-skill.mjs` 和构建由 dsh 写（1a 实现决定 5）；`core/` 可加辅助模块（决定 6） | skill 是写给设计端看的流程说明 | 【已确认】确认人：用户，2026-10-23 |
+| 接口契约 [docs/protocol.md](../protocol.md)（S0）原样通过；它和 PLAN.md §8 表格的三处出入按契约回填 PLAN.md | 字段以 protocol.md 为准（1a 实现决定 3）。审阅之后 Claude 又补了 `run start` 的 `--designer`、`--designer-model`（原契约没有办法告诉运行时设计端是谁），用户同日同意 | 【已确认】确认人：用户，2026-10-23 |
 
 本次建立的文档结构是 AI 采用的方案，尚未经用户确认，不列为决策（见 [NOW.md](NOW.md)“阻塞与待核实”）。
 

@@ -34,7 +34,7 @@
 ## 下一步
 
 1. S1 完成：AC1–AC9 和返工 RW1–RW7 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”）。用户验收：尚未进行。2026-10-23 经用户授权提交，未推送。
-2. 用户审阅 S0 接口契约 [docs/protocol.md](../protocol.md)（草稿）；通过后 Claude 回填 PLAN.md §8 表格的三处出入，再起草 S2、S3 任务书。
+2. S0 接口契约 [docs/protocol.md](../protocol.md) 用户审阅原样通过【已确认】用户 2026-10-23，出入已回填 PLAN.md；之后补的 `run start --designer`、`--designer-model` 也已同意【已确认】用户 2026-10-23。S2、S3 任务书定稿（[briefs/1a-s2-bridge.md](briefs/1a-s2-bridge.md)、[briefs/1a-s3-runtime.md](briefs/1a-s3-runtime.md)），按 S2、S3 的顺序派发，一步验收完再派下一步；每次派发前 Claude 先记核对基准。S2 完成：返工 RW1–RW5 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），用户验收尚未进行；2026-10-23 经用户授权提交，未推送。S2 发现的 PLAN.md、protocol.md 回填已通过【已确认】用户 2026-10-23。下一步：派发 S3。
 3. P15（Windows 桌面版探针，PLAN.md §17 第 15 项）：任务书 [briefs/1a-p15-desktop-windows.md](briefs/1a-p15-desktop-windows.md) 已定稿，待用户派发给 dsh；dsh 交付、Claude 核对空跑后，Windows 上由那台机器的 Claude Code 按 README 执行，这边的 Claude 对照结果文件验收。
 4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
 5. 每次提交和推送都须用户授权。
