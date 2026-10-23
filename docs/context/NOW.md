@@ -31,7 +31,7 @@
 
 - 2026-10-23 第 0 阶段由 dsh 实现，Claude 按上面 8 条验收：
   - 通过（第 1–4、6、8 条）：【已验证】2026-10-23。方法：查看全部新文件；`git config --local --list`、`git check-attr`；把工作区复制到 tmpfs 临时目录新建仓库，跑 `npm test`（3/3 通过）和 `npm run build`（退出 0、不产出文件）；原仓库里 `node --test` 也是 3/3；grep 检查无写死路径或端口；从 dsh 会话日志核对执行过的全部命令，没有 commit、push、kill，也没碰 `~/.dsh`。只在 Linux、Node 22 上跑过。
-  - 第 5 条部分通过：`ci.yml` 能被 PyYAML 解析，矩阵为三平台 × `[20, 'lts/*']`，不跑 `npm install`；三平台实际运行【未验证】，要等推送。
+  - 第 5 条：`ci.yml` 能被 PyYAML 解析，矩阵为三平台 × `[20, 'lts/*']`，不跑 `npm install`。2026-10-23 推送 `05ecf90` 触发 CI 运行 39933515389，6 个 job（ubuntu、windows、macos × Node 20、lts/*）全部 success，【已验证】（GitHub API 查询 job 结论）。job 日志须登录才能看（API 匿名访问返回 403）。风险最大的 windows × Node 20 由用户提供日志截图核对：`# tests 3`、`# pass 3`、`# fail 0`，三个测试名与本地一致，【已验证】2026-10-23。其余 5 个 job 只核对了结论为 success，测试数量和 `lts/*` 解析成的版本【未验证】。另有警告：`actions/checkout@v4`、`actions/setup-node@v4` 面向 Node 20，已被强制改用 Node 24 运行，不影响结果。
   - 第 7 条：初验不通过，`docs/dev-setup.md` 把只在 Node 22 上跑过的结果写成“在 Node.js ≥ 20 上通过”。按用户要求由 Claude 改为“Linux、Node.js 22 上通过；Node 20 及 Windows、macOS 由 CI 验证【未验证】”。复验通过，【已验证】2026-10-23：首行有职责说明，前置条件、测试和构建命令齐全，1a 小节写“暂无”，文中命令实跑 3/3 通过、build 退出 0，无 CR。
   - 偏离：dsh 会话执行任务时权限是 `danger-full-access`、审批 `never`，任务结束后才切到 `workspace-write`（会话日志 `permission/preset` 事件）。这次没有越界操作，但 R6 依赖的沙箱保护并未生效（[RISKS.md](RISKS.md) R6）。
 
@@ -46,10 +46,11 @@
 
 ## 下一步
 
-1. 第 0 阶段除第 5 条（三平台 CI，待推送）外全部通过；用户验收：尚未进行。
+1. 第 0 阶段 8 条全部通过；用户验收：尚未进行。
 2. 远程仓库：用户 2026-10-23 新建 `https://github.com/skeiu/agent-collab.git`。【已验证】2026-10-23：匿名 `git ls-remote` 成功、没有任何引用，即公开的空仓库。推送用的认证还没配置。
-3. 首次提交已完成：`442c9c7`，18 个文件，作者署名按用户指定，用户授权于 2026-10-23；尚未推送。推送认证已配置（SSH 密钥，2026-10-23 `ssh -T` 认出账号），已添加远程 `origin`（SSH 地址），`git ls-remote origin` 连通且远程为空。推送须用户再次授权；推送后查看三平台 CI 结果，完成标准第 5 条。
-4. 第 1a 阶段先做技术验证，结论回填 PLAN.md（§15“进入 1b 的条件”）；开工前把 R6 的隔离要求写进任务书；dsh 会话要在发任务书**之前**切到 `workspace-write`，并先确认沙箱是否真的隔离了宿主进程。
+3. 已推送：`442c9c7`、`05ecf90` 于 2026-10-23 经用户授权推送到 `origin/main`（SSH），本地 `main` 跟踪 `origin/main`。以后每次推送仍须用户授权。
+4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
+5. 第 1a 阶段先做技术验证，结论回填 PLAN.md（§15“进入 1b 的条件”）；开工前把 R6 的隔离要求写进任务书；dsh 会话要在发任务书**之前**切到 `workspace-write`，并先确认沙箱是否真的隔离了宿主进程。
 
 ## 证据入口
 
