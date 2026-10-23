@@ -1,5 +1,7 @@
 本文件：第 1a 阶段技术验证第 2 批交给 dsh 的任务书原文。派任务时让 dsh 读本文件执行（或从下一段起粘贴）；验收时对照；任务书改版时更新。
 
+> 已执行（2026-10-23）。文中提到的 NOW.md“R6 隔离要求”现在在 [RUNBOOK.md](../RUNBOOK.md)“派发 dsh 任务”，“第 2 批”一节已归档到 [history/2026-10-23-1a-batch2.md](../history/2026-10-23-1a-batch2.md)；正文保留原样。
+
 你在 agent-collab 仓库根目录工作。先读 AGENTS.md，再读 docs/context/NOW.md 的“R6 隔离要求”（注意第 6 条的例外）和“第 2 批”。docs/PLAN.md 只读这些章节：§5.2、§5.4、§9.3、§11.9、§17 第 4 项（先用 grep -n '^#' docs/PLAN.md 定位，不要全文读）。可以参考 experiments/1a/ 下第 1 批的实验，尤其是 _shared/harness.mjs（复用它）、06-session-shell-env（会话的创建和 mount）、12-acp-overlay（服务商条目的格式）。
 
 ## 第 0 步：沙箱自检（必须先做）

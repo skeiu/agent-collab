@@ -4,7 +4,7 @@
 
 ## 状态说明
 
-产品功能尚未实现；目前有依据的是文档维护和第 0 阶段的测试、构建命令。规划中的构建、安装和验收流程见 [PLAN.md](../PLAN.md) §14、§15，以及 PLAN.md §7.1 计划新建的 `docs/dev-setup.md`（尚不存在）。
+产品功能尚未实现（第 1a 阶段技术验证已完成）。目前有依据的是：文档维护、提交前检查本机信息、派发 dsh 任务的隔离步骤、测试和构建命令（[dev-setup.md](../dev-setup.md)）、重跑第 1a 阶段的实验。规划中的安装和产品验收流程见 [PLAN.md](../PLAN.md) §14、§15。
 
 ## 文档维护
 
@@ -66,6 +66,21 @@ git grep --cached -nIiE -e '/hom[e]/|/User[s]/|[A-Z]:.User[s]|session-[0-9a-f]{6
 
 无输出才能提交。`.git/private-patterns.txt` 是本机的个人关键词清单（每行一个扩展正则，如用户名、个人路径片段、本地网关名称和端口、私人邮箱），放在 `.git/` 里永远不会被提交；文件不存在时命令会报错，先按本机情况建好。模式里的方括号是为了不匹配这行命令自身。这只是兜底检查，新增的实测记录、日志摘录还要人工看一遍。【已验证】2026-10-23：首次提交前对暂存区执行，无输出。
 
+## 派发 dsh 任务（R6 隔离要求）
+
+依据 [RISKS.md](RISKS.md) R6：写代码的 dsh 会话跑在用户日常的 dsh Web 里，被测的 dsh 必须与它隔离。第 1a 阶段起所有交给 dsh 的任务都按下面执行；任务书原文存在 [briefs/](briefs/)，派发时让 dsh 读文件执行。
+
+1. **派任务前**：用户在 dsh Web 里把这个会话的权限切到 `workspace-write`，确认显示的是 `workspace-write` 后再贴任务书。
+2. **第一步自检**：任务书第一步运行 `pgrep -af dsh` 和 `cat /proc/1/cmdline | tr '\0' ' '`，原样汇报。看到用户日常的 dsh Web 进程，说明沙箱没有隔离进程，**停下来汇报**，由用户决定是否继续。
+3. **被测 dsh 一律用临时环境**：`DSH_HOME` 设为 `os.tmpdir()` 下新建的目录，`dsh web` 加 `--port 0 --no-open`，从输出里解析实际端口。脚本运行任何 `dsh` 命令前都要断言 `DSH_HOME` 位于临时目录下，否则退出。
+4. **缓存重定向到临时目录**：`COREPACK_HOME`、`npm_config_cache`、`PNPM_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`XDG_RUNTIME_DIR`（pnpm 12 把 store 操作锁建在这里，2026-10-23 验收时发现）。
+5. **只停自己启动的进程**：按自己 spawn 得到的 PID 停止，禁止 `kill`/`pkill`/`killall`/`fuser` 按名字或端口找进程。
+6. **不碰用户的 dsh**：不读写 `~/.dsh`（包括其中的凭据、`.env`、会话），不访问 dsh 的默认端口，不对默认 `DSH_HOME` 运行任何 `dsh` 命令。
+   - **需要真实模型时的例外**（用户 2026-10-23 为第 1a 阶段第 2 批同意，以后沿用须在任务书里写明）：可以**只读**真实 web profile 的 `cordis.patch.yml`，从中挑出 `llm-*` 和 `agent-default-model` 条目，复制进临时 `DSH_HOME`；可以在临时 `DSH_HOME` 里建符号链接 `.env`，指向真实的 `$DSH_HOME/.env`，由被测 dsh 自己读取。实验代码和执行端都不得打开、打印或复制 `.env` 的内容，也不得写真实 `DSH_HOME` 里的任何文件。
+7. **审批**：dsh 发出的越权审批，用户一律拒绝；需要越权才能做的实验，记为发现并汇报。
+
+**派发后的核对（Claude 验收时做）**：派任务前记下用户 dsh Web 的 PID、`~/.dsh/profiles/*` 下 `package.json` 和 `cordis.patch.yml` 的哈希、插件目录（用到例外时再加 `.env` 的哈希和修改时间，只存在 Claude 的临时目录）；完成后对比，并按下面“核对 dsh 会话做了什么”查权限事件、执行过的命令和汇报。【已验证】2026-10-23：第 1a 阶段三次派发均按此执行。
+
 ## 构建、测试、运行
 
 命令见 [docs/dev-setup.md](../dev-setup.md)，这里只记验收方法。
@@ -86,7 +101,13 @@ T=$(mktemp -d) && tar --exclude=.git -cf - . | tar -xf - -C "$T" && cd "$T" && g
 bwrap --ro-bind / / --dev /dev --unshare-pid --proc /proc --die-with-parent --tmpfs /tmp -- node experiments/1a/02-agent-presets/run.mjs
 ```
 
-判断：最后一行 `RESULT:` 与 `experiments/1a/REPORT.md` 一致。18 号实验首次要联网下载 pnpm。【已验证】2026-10-23：7 项全部重跑一致（harness 修好 `XDG_RUNTIME_DIR` 后）。
+判断：最后一行 `RESULT:` 与 `experiments/1a/REPORT.md` 一致。【已验证】2026-10-23：第 1 批 7 项全部重跑一致（harness 修好 `XDG_RUNTIME_DIR` 后）。
+
+各实验的特殊条件：
+
+- 18：首次要联网下载 pnpm。
+- 08、17（Claude 侧）：不用 bwrap，直接在终端运行；需要 PATH 上有 `claude`，会调用模型，用 `PROBE_MODEL=<模型名>` 指定便宜的模型（继承的默认模型名可能不可用）。08 全部用例约 0.02 美元。17 每种方式约 1 分钟。Desktop 关会话的存活测试要用户在 Desktop 里操作，步骤见 `experiments/1a/17-worker-survival/README.md`。【已验证】2026-10-23。
+- 04（第 2 批）：会真实调用用户网关上的模型，需要 `AC_REAL_DSH_HOME=<用户的 dsh 目录>`，可选 `AC_TEST_MODEL`；按上面的 bwrap 命令运行（家目录只读）。跑前跑后都要按“派发 dsh 任务”的核对方法对比 `~/.dsh` 和 `.env`。【已验证】2026-10-23：约 18 秒，结论与报告一致。
 
 ### 核对 dsh 会话做了什么
 

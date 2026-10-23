@@ -8,11 +8,11 @@
 
 ## 当前状态
 
-设计已定稿；第 0 阶段（仓库、测试和构建脚本、CI）已完成，产品功能尚未实现（2026-10-23）。开发命令见 [docs/dev-setup.md](docs/dev-setup.md)。当前进展见 [docs/context/NOW.md](docs/context/NOW.md)。
+设计已定稿；第 0 阶段（仓库、测试和构建脚本、CI）和第 1a 阶段的技术验证已完成，产品功能尚未实现（2026-10-23）。技术验证的实验和结论见 [experiments/1a/REPORT.md](experiments/1a/REPORT.md)。开发命令见 [docs/dev-setup.md](docs/dev-setup.md)。当前进展见 [docs/context/NOW.md](docs/context/NOW.md)。
 
 ## 使用方式
 
-暂无（尚未实现）。规划中的入口是 Claude Code 里的 `/collab <需求>`、`/collab-setup`、`/collab-config`（PLAN.md §8、§14）；实际命令名以 PLAN.md §17 第 8 点的确认结果为准。
+暂无（尚未实现）。规划中的入口是 Claude Code 里的 `/agent-collab:collab <需求>`、`/agent-collab:collab-setup`、`/agent-collab:collab-config`（PLAN.md §8、§14；插件命令带插件名前缀，交互模式能否用短名在 T20 确认）。
 
 ## 文档入口
 

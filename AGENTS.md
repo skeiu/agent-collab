@@ -5,9 +5,11 @@
 ## 项目特有约定
 （初始化时只填有依据的内容；无资料写“暂无”）
 
-- 项目类型：软件项目。agent-collab 是让多个编程代理按“设计端 / 执行端”分工协作的 Claude Code 插件，配套 Node.js 共享运行时和 dsh 桥接插件。当前状态：第 0 阶段（仓库准备）已完成，产品功能尚未实现（2026-10-23，见 [docs/context/NOW.md](docs/context/NOW.md)）。
+- 项目类型：软件项目。agent-collab 是让多个编程代理按“设计端 / 执行端”分工协作的 Claude Code 插件，配套 Node.js 共享运行时和 dsh 桥接插件。当前状态：第 0 阶段和第 1a 阶段的技术验证已完成，1a 的实现尚未开始（2026-10-23，见 [docs/context/NOW.md](docs/context/NOW.md)）。
 - 权威设计文档：[docs/PLAN.md](docs/PLAN.md)，约 1000 行。它随仓库公开，不得写入本机信息（见 [DECISIONS.md](docs/context/DECISIONS.md)“项目决策”）。先用 `grep -n '^#' docs/PLAN.md` 定位章节再读，不全文读取。产品设计决策（D 编号）、产品风险、阶段计划与验收标准（T 编号）、实现前待确认点，权威位置都在 PLAN.md 对应章节；`docs/context/` 下的文件只做路由和过程记录，不复制这些正文。
 - 设计与实现分开进行：PLAN.md 由设计讨论会话维护，实现在单独的会话里进行；实现中发现与 PLAN.md 不符时，先更新 PLAN.md 再改代码（PLAN.md 附录 B）。
+- 分工（用户 2026-10-23 指定）：dsh 写代码，Claude 写任务书、检查验收、起草 PLAN.md 回填。派给 dsh 的任务按 [RUNBOOK.md](docs/context/RUNBOOK.md)“派发 dsh 任务”执行：先切 `workspace-write`（dsh Web 新会话默认是 `danger-full-access`），被测 dsh 用临时 `DSH_HOME`；任务书存 `docs/context/briefs/`。Claude 验收时自己重跑，不只看汇报。
+- 提交前按 [RUNBOOK.md](docs/context/RUNBOOK.md)“提交前检查本机信息”扫描：仓库公开，不得含用户名、个人路径、本地网关和端口、会话 ID、密钥。
 - dsh 行为事实依据 dsh 0.2.1-rc.2 的源码、文档和实测；新版本行为不同时以实际为准，并回头更新 PLAN.md（PLAN.md 头部）。
 - 实现约束摘要（权威见 PLAN.md §2、§3 的 D3 与 D19）：Node.js ≥ 20，只用内置模块，不需要 `npm install`；代码不写死路径、端口或机器相关的值；不写入任何模型服务商配置。
 - 测试隔离：测试不依赖开发机特有配置，集成测试用临时的 `DSH_HOME`、`AGENT_COLLAB_HOME` 和 PATH；产品验收在临时目录新建的 git 仓库里做（PLAN.md 附录 B、§15）。PLAN.md 附录 A 的开发机情况只作参考，不是产品前提或默认值。

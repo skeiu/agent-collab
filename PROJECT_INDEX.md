@@ -13,7 +13,7 @@ agent-collab：让多个编程代理按“设计端 / 执行端”分工协作�
 | 了解项目用途、状态、文档入口 | [README.md](README.md) |
 | 长期规则、项目特有约定 | [AGENTS.md](AGENTS.md) |
 | 当前目标、进展、阻塞、下一步 | [docs/context/NOW.md](docs/context/NOW.md) |
-| 执行操作或验收前查步骤 | [docs/context/RUNBOOK.md](docs/context/RUNBOOK.md) |
+| 执行操作或验收前查步骤；派发 dsh 任务；提交前检查本机信息 | [docs/context/RUNBOOK.md](docs/context/RUNBOOK.md) |
 | 查决策的确认状态、被否决的替代方案 | [docs/context/DECISIONS.md](docs/context/DECISIONS.md) |
 | 查项目过程风险、验证缺口 | [docs/context/RISKS.md](docs/context/RISKS.md) |
 | 给执行端的任务书原文 | `docs/context/briefs/`（如 [1a-batch1.md](docs/context/briefs/1a-batch1.md)） |
@@ -49,7 +49,7 @@ agent-collab：让多个编程代理按“设计端 / 执行端”分工协作�
 
 ## 目录与位置（MAP，暂并入本文件）
 
-现状（2026-10-23 第 0 阶段后核对）：
+现状（2026-10-23 第 1a 技术验证后核对）：
 
 ```
 agent-collab/
@@ -62,7 +62,7 @@ agent-collab/
 ├── .github/workflows/ci.yml   三平台 × Node 20 与 LTS 的测试
 ├── scripts/build.mjs    构建脚本（第 0 阶段为骨架）
 ├── tests/               node --test 测试
-├── experiments/1a/      第 1a 阶段技术验证实验（每项一个 run.mjs，汇总见 REPORT.md；不进 node --test）
+├── experiments/1a/      第 1a 阶段技术验证实验：§17 第 1–4、6–8、12、16–18 项，每项一个目录和 run.mjs，汇总见 REPORT.md；不进 node --test
 └── docs/
     ├── PLAN.md          设计方案（权威）
     ├── dev-setup.md     开发前置条件、测试和构建命令
