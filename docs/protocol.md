@@ -2,7 +2,7 @@
 
 # 接口契约
 
-> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。2026-10-24 按 S3 验收的决定修改 §3 的 `attach`（本轮已结束时带回 `result`）、§5.5 的 `worker_lost`、§6 的 `run cancel`（可取消停下的任务）和 `run wait` 的接上说明【已确认】用户 2026-10-24。2026-10-24 按 S3 实现回填 §4、§5.2、§5.3、§5.5、§5.6、§6，用户审阅 diff 后原样通过【已确认】用户 2026-10-24。2026-10-24 按 S3 推送后 CI 暴露的缺陷修改 §5.3 的 `summary.json`、§5.5 的 `lastActivityAt` 和工作进程何时调用 `start`，用户审阅后通过【已确认】用户 2026-10-24。2026-10-24 按 S3 CI 修复的验收补充 §5.3 收尾后到达的事件、§5.5 `lastActivityAt` 的重置时机和不做卡死检查的时段、§6 `run wait` 返回前等待的对象，用户审阅后通过【已确认】用户 2026-10-24。
+> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。2026-10-24 按 S3 验收的决定修改 §3 的 `attach`（本轮已结束时带回 `result`）、§5.5 的 `worker_lost`、§6 的 `run cancel`（可取消停下的任务）和 `run wait` 的接上说明【已确认】用户 2026-10-24。2026-10-24 按 S3 实现回填 §4、§5.2、§5.3、§5.5、§5.6、§6，用户审阅 diff 后原样通过【已确认】用户 2026-10-24。2026-10-24 按 S3 推送后 CI 暴露的缺陷修改 §5.3 的 `summary.json`、§5.5 的 `lastActivityAt` 和工作进程何时调用 `start`，用户审阅后通过【已确认】用户 2026-10-24。2026-10-24 按 S3 CI 修复的验收补充 §5.3 收尾后到达的事件、§5.5 `lastActivityAt` 的重置时机和不做卡死检查的时段、§6 `run wait` 返回前等待的对象，用户审阅后通过【已确认】用户 2026-10-24。2026-10-24 为 S4 补充 §3“dsh 适配器另外约定”和 §6 `doctor` 的检查项、`webRunning`、退出码和 `--deep`，用户审阅后同意【已确认】用户 2026-10-24。2026-10-25 按 S4 实现回填 §3（`createAdapter` 的 `env`、`state`，dsh 适配器的模型、思考强度、`endReason` 换算、acp 用量、覆盖层的 YAML 库）、§5.5 的 `statusReason`、§6 `doctor` 的 `info` 项和文字输出，由 Claude 按用户 2026-10-24 的授权（到 2026-10-25 08:00 自行派发和审核）写入，用户未审阅。
 
 ## 通用约定
 
@@ -163,7 +163,7 @@
 
 ## 3. 执行端适配器接口（`core/adapters/*.mjs`）
 
-每个适配器模块导出 `createAdapter({ config, onEvent, log })`，返回下面的对象。`onEvent(event)` 收到的是第 4 节的统一事件**去掉 `n`、`at`、`turn` 之后**的部分，由 `run.mjs` 补齐后写入 `events.jsonl`。
+每个适配器模块导出 `createAdapter({ config, onEvent, log, env, state })`，返回下面的对象。`env` 是工作进程的环境；`state` 是任务当前的 `state.json`（新任务时为 `null` 或还没有 `sessionId`），dsh 适配器用它比较上一次的连接方式。`onEvent(event)` 收到的是第 4 节的统一事件**去掉 `n`、`at`、`turn` 之后**的部分，由 `run.mjs` 补齐后写入 `events.jsonl`。
 
 ```
 capabilities() → { images, structuredOutput, liveView, resume, humanApproval }
@@ -183,6 +183,18 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 - `finalText`：本轮最后一步的回复文字，即最后一次工具调用之后的全部 `text` 事件拼起来；本轮没有工具调用时就是全部 `text`。
 - `attach` 的 `running` 为 false 表示工作进程不在期间这一轮已经结束：适配器先通过 `onEvent` 补发 `sinceCursor` 之后的事件，再在 `result` 里给出这一轮的 `TurnResult`（`finalText` 按上一条从补发的事件算出）。运行时把它当作正常的一轮结束处理。拿不到结果时不带 `result`。
 - 统一事件可以带 `cursor`（适配器自己定义的补发位置，dsh 桥接为 `{ seq, sub }`），`run.mjs` 把最后一个 `cursor` 存进 `state.json`，工作进程重启后传给 `attach`。
+
+dsh 适配器（`core/adapters/dsh.mjs`）另外约定：
+
+- 连接方式：`start`、`resume`、`attach` 每次都按 PLAN.md §11.5 重新选，不沿用上一次的；和本任务 `session` 事件里的 `transport` 不同时，写一条 `warning`。退回 acp 时写一条 `warning`，说明原因，并提醒任务结束前不要在 dsh Web 里打开这个会话。`dsh.transport` 为 `bridge` 而桥接不可用时，`start`、`resume`、`attach` 抛错，错误的 `code` 为 `executor_unavailable`。
+- 桥接模式的 `attach`：为了按上面的规则算出 `finalText`，补发要覆盖这一轮的全部事件（可以用更小的 `sinceSeq` 或从 0 补发），但只把 `sinceCursor` 之后的事件交给 `onEvent`。实时一轮和 `attach` 带回的结果，`finalText` 用同一个函数从同样的统一事件算出。
+- acp 模式的 `attach` 返回 `attached: false`：stdio 子进程随原来的工作进程结束，这一轮已经中断。`resume` 另起一个 `dsh --profile acp`，用 `session/resume` 接上会话再发消息。
+- 连接意外断开（`AcpClient` 发出 `close`）时，适配器调用 `client.close()` 回收底层的 socket 或子进程；进行中的这一轮以错误结束，错误的 `code` 为 `dsh_disconnected`。
+- `model`：字符串按第一个 `/` 拆成 `{ provider, model }`，也可以直接写对象；拆不开时写 `warning`，跟随 dsh 的设置。桥接模式经 `session/new` 的 `_meta.agentCollab.model` 传；acp 模式只有配置明确指定时才调 `session/set_config_option`（`configId: "model"`，值是 JSON 字符串 `["<provider>","<model>"]`），否则用覆盖层带来的默认模型。
+- `reasoningEffort`：`follow` 为 `null`（不设置）；`low`、`medium`、`high`、`max` 原样传；其他值写 `warning` 后不设置。acp 模式下 `session/new` 返回的 `configOptions` 没有 `reasoning_effort` 时写 `warning` 跳过。dsh 0.2.1-rc.2 的档位：deepseek 服务商为 `off`、`low`、`high`、`max`，pi-ai 服务商为 `off`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`（具体模型可能只给子集）【已验证】2026-10-24 S4。
+- `endReason` 和 `stopReason`：桥接给出 `endReason` 时直接用，`stopReason` 由它换算（`max-tokens` → `max_tokens`，`aborted`、`interrupted` → `cancelled`，其余 → `end_turn`）。acp 模式只有 ACP 的 `stopReason`，反向换算 `endReason`：`end_turn` → `completed`，`max_tokens` → `max-tokens`，`cancelled` → `aborted`，`refusal` → `blocked`，`max_turn_requests` → `error`，其他 → `completed`。dsh-acp 把 `aborted`、`blocked`、`error` 都报成 `end_turn`，所以 acp 模式分不出这几种。`stoppedBy`：桥接模式用桥接给的值；acp 模式本连接发过 `session/cancel` 时为 `client`，否则 `null`。
+- acp 模式的用量：dsh-acp 只发 `usage_update` 的 `{ used, size }`，适配器写成 `usage` 事件的 `input = used`，`output`、`cacheRead`、`cacheWrite` 为 `null`。
+- 覆盖层只用 dsh 安装里的 `js-yaml` 加 dsh 的 `!!js` 类型读写；找不到时 acp 模式不可用，错误的 `code` 为 `overlay_yaml_unavailable`（PLAN.md §11.5）。
 
 ## 4. 统一事件（`events.jsonl`）
 
@@ -288,7 +300,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 
 工作进程只在任务为 `starting`、还没有 `sessionId` 时调用适配器的 `start`。任务已经进行中却找不到 `sessionId`（`state.json` 里没有，`events.jsonl` 里也没有 `session` 事件）时记为 `failed`（`worker_lost`），不再新开会话，避免同一任务出现两个执行端会话。
 
-`failed` 的 `statusReason` 常见值：`worker_lost`（工作进程不在了，`attach` 失败，或接上时这一轮已结束但没有 `result`）、`executor_error`、`transport_unavailable`。
+`failed` 的 `statusReason` 常见值：`worker_lost`（工作进程不在了，`attach` 失败，或接上时这一轮已结束但没有 `result`）、`executor_error`。适配器抛出的错误带字符串 `code` 时，工作进程用它作 `statusReason`，dsh 适配器的有 `executor_unavailable`（`dsh.transport` 为 `bridge` 而桥接不可用）、`dsh_disconnected`、`overlay_yaml_unavailable`（见第 3 节）。
 
 ### 5.6 `summary.json`
 
@@ -325,7 +337,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 | `run resume <任务号>` | `--message <文件>`、`--kind correction \| answer` | `{ ok, runId, turn, status: "starting", workerPid }` |
 | `run cancel <任务号>` | — | 进行中的任务：工作进程确认后返回 `{ ok, runId, status: "cancelled" }`；10 秒内没确认就结束该工作进程（按 `state.json` 里的 pid），状态记为 `cancelled`，`statusReason` 注明。停下的任务（含等待确认期间自己停下的）：不结束任何进程，直接记为 `cancelled`，`statusReason` 写明取消前的状态，`state.json` 和 `summary.json` 只改 `status`、`statusReason`、`endedAt`（`summary.json` 还没写出时，先按事件和基线补一份）。已是 `cancelled` 的直接返回成功 |
 | `watch <任务号>` | `--from <n>`（从第 n 个事件开始，默认从头） | 逐行打印里程碑（格式见下），任务进入“停下”或“结束”状态后退出 |
-| `doctor` | `--json`、`--deep` | 见下 |
+| `doctor` | `--json`、`--deep`、`--designer <名称>`（可选，用来算本次的默认执行端） | 见下 |
 
 拒绝的 `error.code`：
 
@@ -354,10 +366,16 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 
 `watch` 的行格式：`[T001 08:00:00] <内容>`，时间为本地时间。打印这些事件：`status` 变化、`tool_call`（工具名加一个简短的目标，如文件路径或命令的前 80 个字符）、`approval`、`question`、`human_message`、`turn_end`、`warning`、`error`；`thinking`、`text`、`usage` 不打印。
 
-`doctor --json` 的输出：`{ ok, checks: [{ id, level, ok, message }], git, dsh, activeRun }`。
+`doctor --json` 的输出：`{ ok, checks: [{ id, level, ok, message }], git, dsh, activeRun, flow }`。
 
 - `level` 为 `error`（跑不了任务）、`warn`、`info`；`ok` 为 false 且 `level` 为 `error` 的项存在时，顶层 `ok` 为 false。
 - `git`：`{ isRepo, root, head, branch, dirty: [路径] }`，供设计端做 D10 的预检。
 - `dsh`：`{ command, version, home, profile, webRunning, bridge: { online, discoveryFile, protocol, bridgeVersion, problem }, agentPresets }`。
 - `activeRun`：本仓库进行中的任务 `{ runId, status }`，没有时为 `null`，供 D23 的预检。
+- `flow`：按全局和项目两级合并后的流程配置，供 skill 决定派发和返工：`{ designer, executor, confirmBeforeDispatch, maxCorrectionRounds, commitOnAccept, warnSameAgentPair }`。`designer` 取 `--designer`，没给时为 `null`；`executor` 为 `executorByDesigner[designer]`，没给 `--designer` 时为 `null`。配置读不出来时 `flow` 为 `null`，另有一条 `config` 检查项（`warn`）说明原因。
 - 1a 的检查项只有：Node 和 git 的版本、是否 git 仓库、工作区是否干净、dsh 的位置和版本、dsh Web 是否在运行、桥接是否在线和协议是否兼容、`agent-collab` 预设是否可用、本仓库有没有进行中的任务。
+- 1a 的 `id` 和 `level`：`node`、`git`、`repo`、`dsh` 为 `error`；`worktree_clean`、`bridge`、`agent_preset`、`active_run`、`config`（配置文件读不出来或校验失败时才出现）为 `warn`（工作区不干净和已有任务由设计端按 D10、D23 处理；桥接不在线还可以自动启动或退回 acp）；`dsh_web` 为 `info`。`dsh.transport` 为 `bridge` 时，`bridge` 升为 `error`。
+- `dsh.webRunning`：发现文件在线为 `true`；profile 里装了桥接但没有在线的发现文件为 `false`；没装桥接、判断不了时为 `null`（PLAN.md §4.3）。`dsh.bridge` 另带 `installed`（profile 里是否装了桥接）。
+- 退出码：顶层 `ok` 为 true 时 0；为 false 时 1，并带 `error: { code: "doctor_failed", message }`，`message` 取第一个失败的 `error` 级检查项。`checks` 等字段照常输出。
+- `info` 级的项不影响顶层 `ok`；`dsh_web` 的 `ok` 表示判断得出（`webRunning` 不为 `null`）。
+- 不带 `--json` 时每项打印一行给人看：行首标记通过的为 `OK`，没通过的按 `level` 为 `FAIL`、`WARN`、`INFO`，退出码相同。`--deep` 1a 不做，以用法错误（退出码 2）退出并提示尚未实现。

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 本文件：开发模式的命令行启动器：加载本仓库 core/ 下的模块，把 run …、watch … 转过去；其他命令以用法错误退出（doctor 在 S4 实现）。
+// 本文件：开发模式的命令行启动器：加载本仓库 core/ 下的模块，把 run …、watch …、doctor 转过去；其他命令以用法错误退出。
 
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -18,7 +18,7 @@ function usage(message) {
 
 async function main(argv) {
   const [command, ...rest] = argv;
-  if (!command) return usage('用法：collab <run|watch> …');
+  if (!command) return usage('用法：collab <run|watch|doctor> …');
   if (command === 'run') {
     const module = await import(pathToFileURL(path.join(coreDir, 'run.mjs')).href);
     return module.runCommands(rest);
@@ -27,7 +27,11 @@ async function main(argv) {
     const module = await import(pathToFileURL(path.join(coreDir, 'watch.mjs')).href);
     return module.watchCommand(rest);
   }
-  return usage('命令 ' + command + ' 尚未实现（1a 开发模式只有 run 和 watch，doctor 在 S4 实现）');
+  if (command === 'doctor') {
+    const module = await import(pathToFileURL(path.join(coreDir, 'doctor.mjs')).href);
+    return module.doctorCommand(rest);
+  }
+  return usage('命令 ' + command + ' 尚未实现（1a 开发模式只有 run、watch 和 doctor）');
 }
 
 main(process.argv.slice(2))

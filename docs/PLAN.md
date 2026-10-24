@@ -98,7 +98,7 @@
 | `DSH_HOME` | 依次看：配置、设计端环境里的 `DSH_HOME`、登录 shell 环境里的 `DSH_HOME`；都没有就用 dsh 的默认值 `~/.dsh`。设计端（比如 Desktop）的环境不一定带着用户在 shell 里设的变量，所以要查登录 shell | `dsh.home` |
 | dsh 用哪个 profile 跑 Web | 默认 `web` | `dsh.profile` |
 | 工作区根目录 | `git rev-parse --show-toplevel`。从子目录发起时，执行端的工作区仍是仓库根目录 | — |
-| dsh Web 是否在运行、桥接是否在线 | 读桥接写出的发现文件，并检查进程 | — |
+| dsh Web 是否在运行、桥接是否在线 | 读桥接写出的发现文件，并检查其中的 pid。没有在线的发现文件时：profile 里装了桥接，就当作 Web 没在运行；没装桥接，判断不了。dsh 0.2.1-rc.2 没有标记 Web 实例的文件：S4 对比了启动 Web 前后的临时 `DSH_HOME`（没有 pid、锁或端口文件），也查了启动和 Web 相关的包【已验证】2026-10-24（见 11.5） | — |
 | 各执行端实际会用的端点和模型 | 读各工具自己的配置；必要时做一次很小的试调用 | `model`、`env` |
 | 平台和 shell | `process.platform` 等 | — |
 
@@ -320,7 +320,9 @@ agent-collab/
 ├── runs/<仓库标识>/<任务号>/       每个任务的运行目录（见第 8 节末尾）
 ├── installed.json                  安装记录（见 14.3）
 ├── setup.lock                      安装和同步时的全局锁（D23）
-└── logs/setup.log
+├── locks/dsh-web-<哈希>.lock        自动启动 dsh Web 时的互斥文件（同一 DSH_HOME 加 profile 一个），启动完删除（11.5）
+├── overlays/dsh-acp-<pid>-<随机>/   acp 退回模式的临时覆盖层（目录 0700、文件 0600），适配器关闭时删除（11.5）
+└── logs/                           setup.log；dsh-web-<profile>.log：自动启动的 dsh Web 的输出（0600，里面有带令牌的地址）
 ```
 
 令牌、配置、运行记录需要只让本人读写。所以共享运行时**必须放在本机、支持权限控制的文件系统上**，不要放在网络盘、共享盘或不支持权限位的文件系统里。`doctor` 会检查这一点；用 `AGENT_COLLAB_HOME` 改位置时同样适用。
@@ -562,11 +564,12 @@ onEvent(event)                     创建适配器时传入的回调，收到统
 ### 11.5 dsh 适配器的连接顺序
 
 1. 读取发现文件，桥接在线就走桥接（ACP over TCP）。
-2. 桥接不在线，而配置为"自动启动"：在后台启动 `dsh --profile <dsh.profile>`（按配置决定是否加 `--no-open`，可通过 `dsh.webArgs` 追加参数），进程独立常驻。等发现文件出现，超时就报错。
-   - dsh Web 已经开着但没装桥接插件：提示运行 `/collab-setup`，**不要再启动第二个 dsh Web**。
-3. 桥接不可用（没装、版本不兼容、自检失败）：退回 `dsh --profile acp`（ACP stdio），用同一套客户端代码。同时提醒用户：这个会话不会实时显示，任务结束前不要在 dsh Web 里打开它，否则会占锁。
+2. 桥接不在线，profile 里装了桥接（`$DSH_HOME/profiles/<dsh.profile>/package.json` 的 `dependencies` 里有桥接包；`dsh plugin add` 同时写进 `dependencies` 和 `dsh.profile.bundles`，按前者判断【已验证】2026-10-24 S4），而配置为"自动启动"：在后台启动 `dsh --profile <dsh.profile>`（按配置决定是否加 `--no-open`，可通过 `dsh.webArgs` 追加参数），进程独立常驻。等发现文件出现；超时或 Web 提前退出，按第 3 条处理。
+   - profile 里没装桥接：不启动 dsh Web，直接按第 3 条退回，并提示安装桥接（1b 起是运行 `/collab-setup`）。dsh Web 是否已经开着无法可靠判断，所以不论它开没开，都**不会再启动第二个 dsh Web**。
+3. 桥接不可用（没装、版本不兼容、自检失败、自动启动后等不到发现文件）：退回 `dsh --profile acp`（ACP stdio），用同一套客户端代码。同时提醒用户：这个会话不会实时显示，任务结束前不要在 dsh Web 里打开它，否则会占锁。`dsh.transport` 为 `bridge` 时不退回，直接报错；为 `acp` 时跳过前两条。
+   - 连接方式在每次派发、续接、重新接上时各自按本节重新选，不沿用上一次的。
    - 这种模式下没人能批准，审批请求按配置处理，默认拒绝。
-   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。实测可行：覆盖层能正常加载，ACP `session/new` 返回的当前模型就是覆盖层指定的模型；实现时要用可靠的 YAML 解析挑条目，不能靠简单的按行匹配：借用 dsh 安装目录里自带的 YAML 库（从解析出的 dsh 入口位置查找），格式和 dsh 自己的解析一致，也不给我们引入依赖；找不到时退回模式不可用，`doctor` 报告原因（1a 定，用户 2026-10-23 确认）。配置里明确指定了模型时，以配置为准。
+   - **模型**：运行时从 dsh Web 所用 profile 的用户配置层（`$DSH_HOME/profiles/<profile>/cordis.patch.yml`）里挑出服务商和默认模型相关的条目（`llm-*`、`agent-default-model`），再加上 `acp` 条目的 `provider`、`model`，生成一个临时覆盖层，用 `dsh --profile acp --patch <覆盖层>` 传入。**不修改 acp profile 的配置**。实测可行：覆盖层能正常加载，ACP `session/new` 返回的当前模型就是覆盖层指定的模型；实现时要用可靠的 YAML 解析挑条目，不能靠简单的按行匹配：借用 dsh 安装目录里自带的 YAML 库（从解析出的 dsh 入口位置查找），即 dsh 自己加载 patch 用的 `js-yaml`，加上和 dsh 相同的 `!!js` 类型（`@deepseek-ai/dsh-app-boot` 的做法，安装里另有的 `yaml` 包 dsh 不用于加载 patch【已验证】2026-10-24 S4），格式和 dsh 自己的解析一致，也不给我们引入依赖；找不到时退回模式不可用，`doctor` 报告原因（1a 定，用户 2026-10-23 确认）。配置里明确指定了模型时，以配置为准。
    - 注意：第一次运行 `dsh --profile acp` 时，dsh 会按自带模板自动建出 `$DSH_HOME/profiles/acp` 目录。这是 dsh 自己的行为；如果这个目录是因为我们才出现的，就记入 `installed.json`，卸载时询问是否一并删除。
 - 启动 dsh：从 PATH 上的 `dsh` 解析出它的入口 `.js` 文件，再用 `process.execPath` 运行，绕开 Windows 上 npm 生成的 `.cmd` 包装，也不依赖 dsh 装在哪个 Node 版本管理器下。
 

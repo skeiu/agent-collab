@@ -16,7 +16,7 @@
 | # | 问题 | 推荐 | 替代方案 | 理由与把握 |
 |---|---|---|---|---|
 | 1 | ACP 用 SDK 还是自写（PLAN.md §9.4 写明“1a 定”） | 自写精简版：换行分隔的 JSON-RPC 2.0，只实现我们用到的方法；客户端和桥接各一份 | 随仓库附带 `@agentclientprotocol/sdk` 1.4.0（Apache-2.0），要加 NOTICE；桥接里要用 `bundledDependencies` 打包 | 用到的方法不到 10 个，协议是标准 JSON-RPC，自写约 200 行；免去附带第三方代码和许可证处理。方法和字段以 dsh 安装里那份 SDK 的类型定义为准核对。把握：高 |
-| 2 | acp 退回模式生成覆盖层时，YAML 用什么解析（PLAN.md §11.5 要求可靠解析） | 借用 dsh 安装目录里自带的 `yaml` 包（从解析出的 dsh 入口位置找；本机实测 dsh 安装里有 `yaml` 和 `js-yaml`） | 自写只支持 cordis.patch.yml 顶层列表的解析器；或随仓库附带一个 YAML 库 | 这条路径只在 dsh 存在时运行，dsh 自己就是用这些库读配置，格式一定兼容；不引入新依赖。代价是依赖 dsh 的内部依赖，找不到时退回模式不可用，`doctor` 报告原因。把握：中，实现时确认包名和导入方式 |
+| 2 | acp 退回模式生成覆盖层时，YAML 用什么解析（PLAN.md §11.5 要求可靠解析） | 借用 dsh 安装目录里自带的 `yaml` 包（从解析出的 dsh 入口位置找；本机实测 dsh 安装里有 `yaml` 和 `js-yaml`） | 自写只支持 cordis.patch.yml 顶层列表的解析器；或随仓库附带一个 YAML 库 | 这条路径只在 dsh 存在时运行，dsh 自己就是用这些库读配置，格式一定兼容；不引入新依赖。代价是依赖 dsh 的内部依赖，找不到时退回模式不可用，`doctor` 报告原因。把握：中，实现时确认包名和导入方式。S4 核实 dsh 加载 patch 用的是 `js-yaml`，实现改用它【已验证】2026-10-24 |
 | 3 | 接口契约（桥接的 `_meta` 和扩展通知、统一事件格式、`state.json`/`summary.json` 字段、CLI 的 JSON 输出）放在哪 | 新建 `docs/protocol.md`，PLAN.md §8、§9、§11.3 各加一行链接 | 全部写进 PLAN.md | 这是字段级的实现约定，篇幅大、改动频繁；PLAN.md 已约 1000 行。按“一类事实一个权威来源”，字段以 protocol.md 为准，PLAN.md 只留设计意图 |
 | 4 | 桥接和端到端测试怎么跑模型 | 本地假 LLM 服务：一个 Node HTTP 服务，按 OpenAI 兼容接口（dsh 服务商条目 `api: openai-completions` 加 `baseURL`）按脚本返回文字和工具调用；先在 S2 第一步做探针确认可行 | 全部用真实模型（每次跑都要用户的网关和 R6 例外） | 确定、可重复、不花 token，还能在 CI 外随时重跑；审批、提问、续接都能用脚本触发。探针不成立时退回真实模型。把握：中 |
 | 5 | skill 正文（`SKILL.template.md`、`hosts/claude.md`、任务书和问题单模板）谁写 | Claude 起草正文，dsh 写 `render-skill.mjs` 和构建步骤 | 全部由 dsh 写 | skill 是写给设计端（Claude）看的流程说明，属于“任务书和验收”一类的文字工作，不是代码 |
@@ -58,7 +58,7 @@
   - 卡死：超过 `idleTimeoutMinutes` 标记 `stalled`；等待审批期间不计时（测试里用很短的超时）。
   - 杀掉工作进程后重启 `wait`，`events.jsonl` 不缺失（对应 T23 的运行时部分）。
 - **S4**：
-  - 桥接在线时走桥接；Web 没开时自动启动并等到发现文件；Web 开着但没装桥接时报错提示，不启动第二个 Web；桥接不可用时退回 `dsh --profile acp`，覆盖层带上 Web profile 的服务商和默认模型，不修改 acp profile。
+  - 桥接在线时走桥接；Web 没开时自动启动并等到发现文件；profile 里没装桥接时提示安装并退回 acp，不启动 Web（不会开出第二个 Web）；桥接不可用时退回 `dsh --profile acp`，覆盖层带上 Web profile 的服务商和默认模型，不修改 acp profile。
   - `doctor --json` 报告 1a 必需项（dsh 和桥接、git 状态），各项有通过或失败的原因。
 - **S5**：`npm run build` 生成的 `SKILL.md` 与提交进仓库的一致（测试检查）；`claude --plugin-dir` 方式加载后 `/agent-collab:collab` 可用；`allowed-tools` 窄规则生效。
 - **S6**：1a 的 T 编号逐项给出验证方法、结果和日期；需要用户在 dsh Web 里操作的项（T2 看侧栏、T3 批准、T4 插话、T5 打开后续接、T6 点停止），由 Claude 准备好环境和步骤，用户操作，Claude 核对记录。T11、T13 要真实模型，届时按 RUNBOOK 的 R6 例外另行征得同意。
@@ -149,3 +149,14 @@
     - `run cancel` 结束工作进程那条路径上的 `releaseLock` 没有捕获 `lock_unreadable`。只在 Windows 上 `EPERM` 持续超过 1 秒时才会碰到，留到下一轮。
   - 回填：dev-setup.md 补了失败诊断的说明，【已验证】一行更新为 155/155。
 - 2026-10-24 经用户授权提交并推送 `b14504a`。CI 运行 40089287530 的第 1 次尝试：5 组通过，上次失败的两个锁用例在两组 Windows 上都通过，读锁时 `EPERM` 出现 0 次。Windows LTS（Node 24）那组，`run-stall.test.mjs` 整个文件 0.45 秒就失败了，一个用例都没跑，也没有错误输出；这个文件在其他 5 组和本机都通过。经用户同意，Claude 在浏览器里重跑了失败的那组：第 2 次尝试 155 个用例，153 个通过、2 个跳过（Windows 上本来就跳过的），6 组全部通过。【已验证】2026-10-24。两次没查明的偶发失败记为 [RISKS.md](RISKS.md) R11。
+- 2026-10-24 S4（[briefs/1a-s4-dsh-adapter.md](briefs/1a-s4-dsh-adapter.md)）由 Claude 在 dsh Web 派发并交付；2026-10-25 验收通过：DA1–DA10 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `s4-baseline.txt`，profiles 的哈希不变，`~/.agent-collab` 不存在。用户的 dsh Web 进程号从 11084 变成了 2026-10-24 23:52 启动的新进程：这是用户自己重启的（当晚用户说已重新打开 dsh Web）；dsh 会话在 bwrap 里（`--unshare-pid`），看不到也没有结束用户进程。会话日志：开工前切到 `workspace-write`、审批 `ask`，没有审批请求；命令里没有按名字或端口结束进程、没有读写 `~/.dsh`、没有 git 写操作。
+  - 重跑：`npm test` 3 次 195/195，每次约 16.6 秒，无残留进程；三个集成脚本（`adapter-dsh`、`acp-client-dsh`、`bridge-dsh`）都是 `RESULT: 通过`，跑完用户的 dsh Web 和 profiles 不变。反证：副本里删掉断开时的 `client.close()`，DA4 用例失败；副本里换回 S3 的 `run.mjs`，DA9 用例失败（`lock_unreadable`、退出码 1）。
+  - dsh 的核实：桥接同时写进 profile `package.json` 的 `dependencies` 和 `dsh.profile.bundles`；dsh 没有标记 Web 实例的文件；dsh 加载 patch 用的是 `js-yaml`，不是 1a 实现决定 2 写的 `yaml` 包，实现改用 `js-yaml`（决定的本意“和 dsh 自己的解析一致”不变）。模型和思考强度的映射、`endReason` 换算、acp 用量只有 `{ used, size }`，已回填 protocol.md §3。
+  - 超出任务书的改动：`core/worker.mjs` 两处（把 `state` 传给适配器；适配器错误带字符串 `code` 时用作 `statusReason`），理由成立，已回填 protocol.md §3、§5.5。`tests/run-start.test.mjs` 用 `nope-command` 代替已实现的 `doctor` 测未知命令。
+  - 审阅发现 3 处小问题（`yaml` 包的退路会丢 `!!js`、doctor 文字输出把 info 印成 WARN、doctor 连接桥接的协议号写死），写成返工任务书 [briefs/1a-s4-rework.md](briefs/1a-s4-rework.md)，由 Claude 按用户授权定稿并派发。
+  - 回填：PLAN.md §4.3、§7.2、§11.5，protocol.md §3、§5.5、§6，dev-setup.md（测试变量、假 dsh、集成脚本表）。
+- 2026-10-25 S4 返工（[briefs/1a-s4-rework.md](briefs/1a-s4-rework.md)）由 Claude 按用户授权派发，dsh 交付，验收通过：SR1–SR4 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `s4-rework-baseline.txt`，只有 `core/adapters/dsh.mjs`、`core/doctor.mjs` 和测试（`dsh-acp`、`doctor`、两个 helper、`adapter-dsh` 集成脚本）变了；profiles 的哈希、用户 dsh Web 的进程号不变，`~/.agent-collab` 不存在。会话日志：开工前切到 `workspace-write`、审批 `ask`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
+  - 重跑：`npm test` 3 次 197/197，每次约 16.6 秒；`adapter-dsh` 集成脚本 `RESULT: 通过`（I3 新增 `!!js` 断言）；`npm run build` 退出码 0。反证：副本里给 `loadYamlLibrary` 加回 `yaml` 包的退路，“只有 yaml 包”用例失败（`'done' !== 'failed'`）。
+  - 实现：`js-yaml` 改为只在 dsh 包目录及其上层的 `node_modules` 里找（不经 Node 的全局路径）；覆盖层内容生成好之后才建目录。doctor 文字输出按 level 印 `INFO`、`WARN`、`FAIL`，连接桥接用 `SUPPORTED_PROTOCOL` 和 `package.json` 的版本。

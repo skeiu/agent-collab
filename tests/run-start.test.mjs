@@ -152,7 +152,7 @@ test('用法错误：没有 --executor 也没有 --designer、未知子命令、
   assert.equal(missingExecutor.code, 2);
   assert.equal(missingExecutor.json.error.code, 'usage');
 
-  const unknownCommand = await runCli(ctx, ['doctor'], { executor });
+  const unknownCommand = await runCli(ctx, ['nope-command'], { executor });
   assert.equal(unknownCommand.code, 2);
   assert.equal(unknownCommand.json.error.code, 'usage');
   assert.match(unknownCommand.json.error.message, /尚未实现/);

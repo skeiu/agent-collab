@@ -35,7 +35,7 @@ export async function assertAdapterAvailable(name, env = process.env) {
 }
 
 /** 加载适配器并创建实例。 */
-export async function loadAdapter(name, { config, onEvent, log, env = process.env }) {
+export async function loadAdapter(name, { config, onEvent, log, env = process.env, state = null }) {
   const file = await assertAdapterAvailable(name, env);
   let module;
   try {
@@ -51,7 +51,7 @@ export async function loadAdapter(name, { config, onEvent, log, env = process.en
     error.code = 'executor_unavailable';
     throw error;
   }
-  return module.createAdapter({ config, onEvent, log });
+  return module.createAdapter({ config, onEvent, log, env, state });
 }
 
 /** 组装传给适配器 start() 的 options（config.mjs 按执行端合并好的选项）。 */

@@ -702,7 +702,12 @@ async function cmdCancel(argv, io, context) {
     endedAt,
   });
   await writeJson(summaryPath, summary);
-  await releaseLock(lockFileFor(home, located.repoId), runId);
+  try {
+    await releaseLock(lockFileFor(home, located.repoId), runId);
+  } catch (error) {
+    // S3 遗留：锁读不出来时终态已经是 cancelled，不能因为释放失败以错误退出。
+    io.err('锁未释放，留给下一次获取时按旧锁处理：' + (error && error.message ? error.message : String(error)));
+  }
   io.out({ ok: true, runId, status: 'cancelled' });
   return 0;
 }

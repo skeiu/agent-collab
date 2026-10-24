@@ -457,7 +457,7 @@ export async function runWorker({ runDir }) {
     const stallPollMs = envNumber(env, 'AGENT_COLLAB_TEST_STALL_POLL_MS', 5000);
     const cancelPollMs = envNumber(env, 'AGENT_COLLAB_TEST_CANCEL_POLL_MS', 500);
 
-    adapter = await loadAdapter(executorName, { config, onEvent: onAdapterEvent, log: adapterLog, env });
+    adapter = await loadAdapter(executorName, { config, onEvent: onAdapterEvent, log: adapterLog, env, state });
     log('工作进程启动，pid ' + process.pid + '，任务 ' + state.runId + '，状态 ' + state.status);
     startTimers(idleTimeoutMs, stallPollMs, cancelPollMs);
 
@@ -583,7 +583,7 @@ export async function runWorker({ runDir }) {
         result = await turnPromise;
       } catch (error) {
         log('等待本轮结束失败：' + (error && error.stack ? error.stack : String(error)));
-        await finalize('failed', 'executor_error');
+        await finalize('failed', error && typeof error.code === 'string' ? error.code : 'executor_error');
         return;
       }
       const nextTurn = await finishTurn(result ?? {});
@@ -598,7 +598,7 @@ export async function runWorker({ runDir }) {
   } catch (error) {
     log('工作进程异常：' + (error && error.stack ? error.stack : String(error)));
     try {
-      await finalize('failed', 'executor_error');
+      await finalize('failed', error && typeof error.code === 'string' ? error.code : 'executor_error');
     } catch (finalizeError) {
       log('收尾失败：' + (finalizeError && finalizeError.stack ? finalizeError.stack : String(finalizeError)));
     }

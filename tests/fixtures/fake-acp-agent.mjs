@@ -94,6 +94,7 @@ function createAgentPeer(readable, writable, label) {
       } else {
         sendText(peer, sessionId, 'permission:' + (decision.outcome ?? 'unknown'));
       }
+      if (script.afterPermission) sendText(peer, sessionId, script.afterPermission);
     }
 
     if (script.fsRequest) {

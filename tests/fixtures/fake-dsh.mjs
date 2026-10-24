@@ -38,6 +38,7 @@ function makeAgent(fake, session) {
       fake.followups.push({ sessionId: session.id, message });
       idle = false;
       agent.status = 'running';
+      if (typeof fake.runTurn === 'function') fake.runTurn(session, agent);
     },
     whenIdle() {
       if (idle) return Promise.resolve();
@@ -82,6 +83,9 @@ export function createFakeDsh(options = {}) {
     permissionSets: [],
     sandboxModes: [],
     approvalPolicies: [],
+    titles: [],
+    turnCounters: new Map(),
+    turns: Array.isArray(options.turns) ? options.turns : null,
     requestHeader: options.requestHeader ?? null,
     childrenPending: options.childrenPending ?? false,
     async emit(sessionId, type, data) {
@@ -222,7 +226,12 @@ export function createFakeDsh(options = {}) {
     workspaceRegistry,
     permissionPresets,
     agentDefaultModel: { currentSelection() { return options.defaultModel ?? { provider: 'fake', model: 'fake-model', reasoningEffort: 'high' }; } },
-    sessionTitle: { rename(session, title) { session.append('session/title', { title, messageSeqs: [], source: { kind: 'user' } }); } },
+    sessionTitle: {
+      rename(session, title) {
+        fake.titles.push({ sessionId: session.id, title });
+        session.append('session/title', { title, messageSeqs: [], source: { kind: 'user' } });
+      },
+    },
     subagents: { async waitForChildren() { return fake.childrenPending; } },
     dshHomePath: (...segments) => path.join(home, ...segments.map(String)),
     pluginPackages: { packageOf() { return { name: '@deepseek-ai/dsh', version: options.version ?? '0.2.1' }; } },
@@ -250,6 +259,86 @@ export function createFakeDsh(options = {}) {
       return () => {};
     },
   };
+
+  fake.runTurn = (session, agent) => {
+    if (!fake.turns) return;
+    const turn = (fake.turnCounters.get(session.id) ?? 0) + 1;
+    fake.turnCounters.set(session.id, turn);
+    const steps = fake.turns[Math.min(turn - 1, fake.turns.length - 1)] ?? [];
+    let ended = false;
+    const end = (reason) => {
+      if (ended) return;
+      ended = true;
+      session.append('turn/end', { turn, reason });
+    };
+    session.append('turn/start', { turn });
+    (async () => {
+      try {
+        for (const step of steps) {
+          if (ended) break;
+          if (!step || typeof step !== 'object') continue;
+          if (step.kind === 'text') {
+            session.append('assistant/message', {
+              message: { id: 'fake-msg-' + Math.random().toString(36).slice(2), role: 'assistant', content: [{ type: 'text', text: String(step.text ?? '') }] },
+              ...(step.usage ? { usage: step.usage } : {}),
+            });
+          } else if (step.kind === 'thinking') {
+            session.append('assistant/message', {
+              message: { id: 'fake-msg-' + Math.random().toString(36).slice(2), role: 'assistant', content: [{ type: 'reasoning', text: String(step.text ?? '') }] },
+            });
+          } else if (step.kind === 'tool') {
+            session.append('tool/call', {
+              callId: step.callId ?? 'call-' + Math.random().toString(36).slice(2),
+              name: step.name ?? 'bash',
+              arguments: JSON.stringify(step.input ?? {}),
+            });
+          } else if (step.kind === 'toolResult') {
+            session.append('tool/result', {
+              message: {
+                toolCallId: step.callId ?? 'call-1',
+                isError: step.ok === false,
+                content: [{ type: 'text', text: String(step.output ?? '') }],
+              },
+            });
+          } else if (step.kind === 'sleep') {
+            await new Promise((resolve) => setTimeout(resolve, step.ms ?? 100));
+          } else if (step.kind === 'humanStop') {
+            agent.cancel({ kind: 'user' });
+            end({ kind: 'aborted', reason: { kind: 'user' } });
+          } else if (step.kind === 'waitCancel') {
+            const deadline = Date.now() + (step.timeoutMs ?? 20000);
+            while (Date.now() < deadline && !fake.cancels.some((item) => item.sessionId === session.id)) {
+              await new Promise((resolve) => setTimeout(resolve, 20));
+            }
+            end({ kind: 'aborted', reason: { kind: 'user' } });
+          } else if (step.kind === 'turnEnd') {
+            end({ kind: step.endReason ?? 'completed' });
+          }
+        }
+        end({ kind: 'completed' });
+      } catch (error) {
+        fake.lastError = error;
+        end({ kind: 'error', error: String(error && error.message ? error.message : error) });
+      }
+    })();
+  };
+
+  fake.snapshot = () => ({
+    created: fake.created.map((item) => ({ sessionId: item.sessionId, agentOptions: item.agentOptions ?? null, preset: item.preset ?? null })),
+    followups: fake.followups.map((item) => ({ sessionId: item.sessionId })),
+    cancels: fake.cancels.map((item) => ({ sessionId: item.sessionId })),
+    workspaces: fake.workspaces.map((item) => ({ id: item.id, title: item.title, path: item.path, sessionIds: [...item.sessionIds] })),
+    mountedPresets: fake.mountedPresets,
+    titles: fake.titles,
+    permissionSets: fake.permissionSets,
+    registeredEnv: fake.registeredEnv.map((entry) => {
+      const sessionId = String(entry.name ?? '').replace(/^agent-collab-/, '');
+      const agent = fake.agents.get(sessionId);
+      let resolved = null;
+      try { resolved = typeof entry.resolve === 'function' ? entry.resolve({ agent }) : null; } catch { resolved = null; }
+      return { sessionId, variables: Object.keys(entry.variables ?? {}), resolved };
+    }),
+  });
 
   for (const [name, service] of Object.entries(services)) ctx[name] = service;
   return { ctx, fake, services, home };
