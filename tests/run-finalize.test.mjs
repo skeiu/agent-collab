@@ -110,10 +110,18 @@ test('run wait 返回时它启动的工作进程都已退出、仓库锁已释�
   await assertTaskStatus(wait, 'partial', ctx);
 
   // worker.log 里记过的每个工作进程 pid（被杀的、run wait 新启动的）都应已退出。
+  // 启动次数按“工作进程启动”的行数算，不按 pid 去重：Windows 上 PID 复用很快（RISKS.md R11），被 SIGKILL 的
+  // 工作进程和 run wait 新启动的工作进程可能拿到同一个 pid，去重后会把两次启动算成一次。
   const log = await fsp.readFile(path.join(runDir, 'worker.log'), 'utf8');
-  const pids = [...new Set([...log.matchAll(/pid (\d+)/g)].map((match) => Number(match[1])))];
-  assert.ok(pids.length >= 2, 'worker.log 里应记过至少两个工作进程的 pid，实际 ' + JSON.stringify(pids));
-  for (const pid of pids) assert.equal(pidAlive(pid), false, 'run wait 返回后工作进程 ' + pid + ' 还活着');
+  const logText = 'worker.log 全文：\n' + log;
+  const started = [...log.matchAll(/工作进程启动，pid (\d+)/g)].map((match) => Number(match[1]));
+  assert.ok(
+    started.length >= 2,
+    'worker.log 里应记过至少两个工作进程的启动（被杀的、run wait 新启动的），实际 ' + started.length + ' 条\n' + logText,
+  );
+  for (const pid of new Set(started)) {
+    assert.equal(pidAlive(pid), false, 'run wait 返回后工作进程 ' + pid + ' 还活着\n' + logText);
+  }
 
   const lockFile = path.join(path.dirname(runDir), 'active.lock');
   const lock = await readJson(lockFile).catch(() => null);
