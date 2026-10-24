@@ -181,3 +181,59 @@ test('--deep 以用法错误退出 2；不带 --json 时每项一行', async (t)
   assert.ok(lines.length >= 8, plain.stdout);
   assert.ok(lines.every((line) => line.startsWith('[')), plain.stdout);
 });
+
+test('--designer 输出 flow，executor 跟随全局 executorByDesigner', async (t) => {
+  const caseApi = await createDshCase('doctor-flow');
+  t.after(() => caseApi.cleanup());
+  const first = await caseApi.runCli(['doctor', '--json', '--designer=claude']);
+  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assert.deepEqual(first.json.flow, {
+    designer: 'claude',
+    executor: 'dsh',
+    confirmBeforeDispatch: 'risky',
+    maxCorrectionRounds: 2,
+    commitOnAccept: false,
+    warnSameAgentPair: true,
+  });
+
+  await writeConfig(caseApi, { ...caseApi.config, executorByDesigner: { claude: 'other' } });
+  const changed = await caseApi.runCli(['doctor', '--json', '--designer', 'claude']);
+  assert.equal(changed.code, 0, changed.stdout + changed.stderr);
+  assert.equal(changed.json.flow.executor, 'other');
+});
+
+test('项目配置只能收紧：全局 always、项目 never 时 flow 仍为 always', async (t) => {
+  const caseApi = await createDshCase('doctor-flow-tighten');
+  t.after(() => caseApi.cleanup());
+  await writeConfig(caseApi, { ...caseApi.config, confirmBeforeDispatch: 'always' });
+  await fsp.writeFile(path.join(caseApi.repo, '.agent-collab.json'), JSON.stringify({ confirmBeforeDispatch: 'never' }));
+  const result = await caseApi.runCli(['doctor', '--json', '--designer', 'claude']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.json.flow.confirmBeforeDispatch, 'always');
+  assert.equal(check(result, 'config').level, 'warn');
+});
+
+test('没有 --designer 时 flow 的 designer 和 executor 都是 null', async (t) => {
+  const caseApi = await createDshCase('doctor-flow-null');
+  t.after(() => caseApi.cleanup());
+  const result = await caseApi.runCli(['doctor', '--json']);
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.json.flow.designer, null);
+  assert.equal(result.json.flow.executor, null);
+});
+
+test('全局配置不是合法 JSON 时 flow 为 null、config 为 warn、顶层 ok 不变', async (t) => {
+  const caseApi = await createDshCase('doctor-flow-bad-config');
+  t.after(() => caseApi.cleanup());
+  await fsp.writeFile(path.join(caseApi.home, 'config.json'), '{ not json');
+  const result = await caseApi.runCli(['doctor', '--json'], {
+    env: { PATH: caseApi.fake.binDir + path.delimiter + (process.env.PATH ?? '/usr/bin:/bin') },
+  });
+  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assert.equal(result.json.ok, true);
+  assert.equal(result.json.flow, null);
+  const configCheck = check(result, 'config');
+  assert.equal(configCheck.level, 'warn');
+  assert.equal(configCheck.ok, false);
+  assert.match(configCheck.message, /配置/);
+});

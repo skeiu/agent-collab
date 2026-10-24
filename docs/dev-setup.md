@@ -45,7 +45,7 @@ node --test --test-timeout=60000
 
 假执行端的脚本（JSON）除了按轮次列出步骤，还支持：步骤 `{ "kind": "wait_for_attach", "ms"? }`（停在这一轮里，直到这一轮收到过一次 `attach`，用来保证“接上时这一轮还在进行中”）；顶层开关 `afterTurnEnd: { triggerFile | ms, event, timeoutMs? }`（一轮结束后等触发文件出现或固定毫秒，再补发一条事件）和 `emitSessionOnStart`（`start` 期间自己发 `session` 事件）。一轮结束时，若脚本的 `end.finalText` 不能从这一轮的 text 事件按 [protocol.md](protocol.md) §3 的规则算出，假执行端会补一条 text 事件，使 `turn_end` 消息和补发的事件给出同一份最终文字。传了 `--record <文件>` 时，另外写 `<文件>.starts.jsonl`、`<文件>.attaches.jsonl`（每次 `attach` 时这一轮是否在跑）和 `<文件>.commands.jsonl`（收到的命令）。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。对 `run start`、`run wait`、`run status` 返回的任务状态，测试用 `tests/helpers/run-harness.mjs` 的 `assertTaskStatus` 断言。断言失败时会带上这次命令的 stdout、stderr 和运行目录的诊断：`status`、`statusReason`、`worker.log` 最后 40 行、最近 10 条事件的类型。这样 CI 失败时，直接看日志就能定位。【已验证】2026-10-24，Linux、Node 22：`npm test` 连跑 3 次 155/155，跑完无残留进程。
 
-dsh 适配器的测试（`tests/detect.test.mjs`、`dsh-adapter`、`dsh-autostart`、`dsh-acp`、`doctor`）不用真 dsh：`tests/helpers/fake-dsh-install.mjs` 在临时目录里装一个假的 dsh 包（入口 `tests/fixtures/fake-dsh-cli.mjs`），`--profile web` 时在进程里跑真的桥接（`tests/fixtures/fake-dsh.mjs` 加 `dsh-bridge/lib/index.js`）并写发现文件，`--profile acp` 时当 ACP stdio 代理；`tests/helpers/dsh-case.mjs` 准备临时仓库、`AGENT_COLLAB_HOME`、`DSH_HOME` 和配置。假 dsh 自己读的变量 `FAKE_DSH_REPO_ROOT`、`FAKE_DSH_RECORD`（记录参数、环境和 `--patch` 内容的文件）、`FAKE_DSH_STATE_FILE`、`FAKE_DSH_TURNS`（按轮次的脚本）、`FAKE_DSH_PRESETS`、`FAKE_DSH_DEFAULT_MODEL`、`FAKE_DSH_WEB_MODE`（Web 正常、提前退出或不写发现文件）只由测试设置。【已验证】2026-10-25，Linux、Node 22：`npm test` 连跑 3 次 197/197，跑完无残留进程。
+dsh 适配器的测试（`tests/detect.test.mjs`、`dsh-adapter`、`dsh-autostart`、`dsh-acp`、`doctor`）不用真 dsh：`tests/helpers/fake-dsh-install.mjs` 在临时目录里装一个假的 dsh 包（入口 `tests/fixtures/fake-dsh-cli.mjs`），`--profile web` 时在进程里跑真的桥接（`tests/fixtures/fake-dsh.mjs` 加 `dsh-bridge/lib/index.js`）并写发现文件，`--profile acp` 时当 ACP stdio 代理；`tests/helpers/dsh-case.mjs` 准备临时仓库、`AGENT_COLLAB_HOME`、`DSH_HOME` 和配置。假 dsh 自己读的变量 `FAKE_DSH_REPO_ROOT`、`FAKE_DSH_RECORD`（记录参数、环境和 `--patch` 内容的文件）、`FAKE_DSH_STATE_FILE`、`FAKE_DSH_TURNS`（按轮次的脚本）、`FAKE_DSH_PRESETS`、`FAKE_DSH_DEFAULT_MODEL`、`FAKE_DSH_WEB_MODE`（Web 正常、提前退出或不写发现文件）只由测试设置。【已验证】2026-10-25，Linux、Node 22：`npm test` 连跑 3 次 213/213（S5 之后），跑完无残留进程。
 
 ## 集成测试
 
@@ -67,10 +67,23 @@ npm run build
 node scripts/build.mjs
 ```
 
-构建脚本定位仓库根目录后逐项执行：目前只实现“打包桥接 .tgz”，把 `dsh-bridge/` 打成 `dist/dsh-bridge-<版本>.tgz`（可用 `--out <目录>` 改输出位置）；生成 SKILL.md 和组装运行时仍报告尚未实现。
+构建脚本定位仓库根目录后逐项执行：
+
+- 生成 SKILL.md：用 `core/render-skill.mjs` 把 `skills/collab/SKILL.template.md` 和 `skills/collab/hosts/claude.md` 渲染成 `skills/collab/SKILL.md`（写在仓库里，内容没变时不重写）。生成的 `SKILL.md` 要提交；改了模板或 host 文件后必须重新构建，`tests/render-skill.test.mjs` 会检查两者一致。
+- 打包桥接 .tgz：把 `dsh-bridge/` 打成 `dist/dsh-bridge-<版本>.tgz`（可用 `--out <目录>` 改输出位置）。
+- 组装运行时：仍报告尚未实现（1b）。
+
+`node scripts/build.mjs --check` 只核对 `SKILL.md` 是否和模板渲染结果一致，不写任何文件、不打包；不一致或文件不存在时退出码 1。
 
 【已验证】2026-10-23：`npm test` 与 `npm run build` 在 Linux、Node.js 22 上通过，退出码 0。Linux、macOS、Windows 上 Node 20 和当前 LTS 的 `npm test` 由 CI 验证：【已验证】2026-10-24，CI 运行 40056577654（`a67780f`）6 组全部通过；集成测试和构建不在 CI 里。
 
 ## 1a 阶段的手动安装步骤
 
-暂无，第 1a 阶段补充。
+1a 不做安装程序（PLAN.md §15“1a”）。在本机试用时按下面的步骤，`<仓库>` 是本仓库的绝对路径：
+
+1. 构建：`npm run build`，得到 `dist/dsh-bridge-<版本>.tgz`，并确认 `skills/collab/SKILL.md` 是最新的。
+2. 给 dsh 装桥接：`dsh plugin --profile web add <仓库>/dist/dsh-bridge-<版本>.tgz`。安装要用 pnpm，首次取得 pnpm 要联网（PLAN.md §17 第 18 项）。dsh Web 运行中新装会热加载；更新已装的桥接后要重启 dsh Web（PLAN.md §5.6）。不装桥接也能用，运行时会退回 `dsh --profile acp`。
+3. 以开发方式加载 Claude Code 插件：`claude --plugin-dir <仓库>`。命令带插件名前缀，在 Claude Code 里输入 `/agent-collab:collab <需求>`；skill 调用的 `bin/collab.mjs` 直接使用仓库里的 `core/`。
+4. 检查：在要派发任务的 git 仓库里运行 `node <仓库>/bin/collab.mjs doctor --designer claude`。
+
+【已验证】2026-10-25，Claude Code 2.1.309、Linux：在临时 git 仓库里用 `claude -p --plugin-dir <仓库> --permission-mode default` 加载，`/agent-collab:collab` 出现在命令和 skill 列表里；skill 里的 `node "<插件目录>/bin/collab.mjs" doctor --json --designer claude` 不经审批直接运行，同一插件里的 `node "<插件目录>/scripts/build.mjs" --check` 被拒（“This command requires approval”），即 `allowed-tools` 的窄规则生效。第 1、2 步由集成脚本 `adapter-dsh.mjs`、`bridge-dsh.mjs` 在临时 `DSH_HOME` 里执行过；第 4 步的实际派发流程（T21）未验证。

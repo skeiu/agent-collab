@@ -88,12 +88,12 @@ async function activeRunFor({ home, repoRoot }) {
 /** doctor 命令入口；返回进程退出码。 */
 export async function doctorCommand(argv, io = {}, context = {}) {
   const out = io.out ?? ((value) => process.stdout.write(typeof value === 'string' ? value + '\n' : JSON.stringify(value) + '\n'));
-  const err = io.err ?? ((line) => process.stderr.write(String(line) + '\n'));
   const env = context.env ?? process.env;
   const cwd = context.cwd ?? process.cwd();
   let json = false;
   let deep = false;
   let repoOption = null;
+  let designerOption = null;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '--json') json = true;
@@ -103,7 +103,14 @@ export async function doctorCommand(argv, io = {}, context = {}) {
       if (argv[index] === undefined) return reportUsage(out, '--repo 缺少值');
       repoOption = argv[index];
     } else if (arg.startsWith('--repo=')) repoOption = arg.slice(7);
-    else return reportUsage(out, '未知参数 ' + arg);
+    else if (arg === '--designer') {
+      index += 1;
+      if (argv[index] === undefined || argv[index].length === 0) return reportUsage(out, '--designer 缺少值');
+      designerOption = argv[index];
+    } else if (arg.startsWith('--designer=')) {
+      designerOption = arg.slice('--designer='.length);
+      if (designerOption.length === 0) return reportUsage(out, '--designer 缺少值');
+    } else return reportUsage(out, '未知参数 ' + arg);
   }
   if (deep) {
     const value = { ok: false, error: { code: 'usage', message: 'doctor --deep 1a 尚未实现，请去掉 --deep' } };
@@ -114,15 +121,24 @@ export async function doctorCommand(argv, io = {}, context = {}) {
   const home = context.home ?? resolveAgentCollabHome(env);
   const startDir = repoOption ? path.resolve(cwd, repoOption) : cwd;
   const repoRoot = await findRepoRoot(startDir);
-  let config = {};
+  let config = null;
+  let configProblem = null;
+  let configErrors = [];
   try {
     const loaded = await loadConfig({ repoDir: repoRoot ?? null, env });
     config = loaded.config;
+    configErrors = Array.isArray(loaded.errors) ? loaded.errors : [];
   } catch (error) {
-    err('读取配置失败：' + (error && error.message ? error.message : String(error)));
+    configProblem = error && error.message ? error.message : String(error);
   }
 
   const checks = [];
+  if (configProblem) {
+    checks.push(check('config', 'warn', false, '读取配置失败：' + configProblem));
+  } else if (configErrors.length > 0) {
+    const keys = configErrors.map((item) => item.keyPath).filter(Boolean);
+    checks.push(check('config', 'warn', false, '项目配置有 ' + configErrors.length + ' 项未生效：' + keys.join(', ')));
+  }
   const nodeVersion = process.versions.node;
   const nodeMajor = Number(String(nodeVersion).split('.')[0]);
   checks.push(check('node', 'error', Number.isFinite(nodeMajor) && nodeMajor >= 20, 'Node ' + nodeVersion + (nodeMajor >= 20 ? '' : '（需要 Node ≥ 20）')));
@@ -188,6 +204,22 @@ export async function doctorCommand(argv, io = {}, context = {}) {
     },
     agentPresets: presetsResult.presets,
   };
+  const designer = designerOption ?? null;
+  let flow = null;
+  if (!configProblem) {
+    const mapping = config.executorByDesigner;
+    const executor = designer === null
+      ? null
+      : (mapping && Object.prototype.hasOwnProperty.call(mapping, designer) ? mapping[designer] : null);
+    flow = {
+      designer,
+      executor,
+      confirmBeforeDispatch: config.confirmBeforeDispatch ?? null,
+      maxCorrectionRounds: config.maxCorrectionRounds ?? null,
+      commitOnAccept: config.commitOnAccept ?? null,
+      warnSameAgentPair: config.warnSameAgentPair ?? null,
+    };
+  }
   const result = {
     ok,
     checks,
@@ -200,6 +232,7 @@ export async function doctorCommand(argv, io = {}, context = {}) {
     },
     dsh,
     activeRun,
+    flow,
   };
   if (!ok) result.error = { code: 'doctor_failed', message: failedError.message };
 
@@ -209,6 +242,7 @@ export async function doctorCommand(argv, io = {}, context = {}) {
       const mark = item.ok ? 'OK' : item.level === 'error' ? 'FAIL' : item.level === 'warn' ? 'WARN' : 'INFO';
       out('[' + mark + '] ' + item.id + '：' + item.message);
     }
+    out('[FLOW] flow：' + (flow === null ? 'null' : JSON.stringify(flow)));
   }
   return ok ? 0 : 1;
 }

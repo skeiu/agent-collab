@@ -1,8 +1,8 @@
-// 本文件：构建脚本测试。验证桥接 .tgz 的打包内容、--out 参数和零依赖约定；构建步骤或包内容变化时更新。
+// 本文件：构建脚本测试。验证 SKILL.md 的 --check 核对、桥接 .tgz 的打包内容、--out 参数和零依赖约定；构建步骤或包内容变化时更新。
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { test } from 'node:test';
@@ -52,6 +52,61 @@ test('scripts/build.mjs 把 dsh-bridge 打成 .tgz，--out 生效，包内没有
     assert.deepEqual(Object.keys(bridgePackage.peerDependencies), ['@deepseek-ai/dsh']);
     assert.match(bridgePackage.peerDependencies['@deepseek-ai/dsh'], /^>=0\.2\.1(?:-[0-9A-Za-z.-]+)? <0\.3\.0$/);
     assert.deepEqual(bridgePackage.peerDependenciesMeta, { '@deepseek-ai/dsh': { optional: true } });
+  } finally {
+    await rm(workDir, { recursive: true, force: true });
+  }
+});
+
+async function copyBuildTree(dest) {
+  const files = [
+    'package.json',
+    'scripts/build.mjs',
+    'core/render-skill.mjs',
+    'skills/collab/SKILL.template.md',
+    'skills/collab/hosts/claude.md',
+    'skills/collab/SKILL.md',
+  ];
+  for (const relative of files) {
+    const target = path.join(dest, relative);
+    await mkdir(path.dirname(target), { recursive: true });
+    await cp(path.join(repoRoot, relative), target);
+  }
+}
+
+test('build.mjs --check 一致时不写文件、不生成 dist；模板改动后退出码 1', async () => {
+  const workDir = await mkdtemp(path.join(os.tmpdir(), 'agent-collab-build-check-'));
+  try {
+    await copyBuildTree(workDir);
+    const skill = path.join(workDir, 'skills', 'collab', 'SKILL.md');
+    const before = await stat(skill, { bigint: true });
+    const ok = spawnSync(process.execPath, [path.join(workDir, 'scripts', 'build.mjs'), '--check'], {
+      cwd: workDir,
+      encoding: 'utf8',
+    });
+    assert.equal(ok.signal, null, 'build.mjs 被信号终止：' + ok.signal);
+    assert.equal(ok.status, 0, '退出码应为 0，实际 ' + ok.status + '；stdout：' + ok.stdout + '；stderr：' + ok.stderr);
+    assert.match(ok.stdout, /一致/);
+    const after = await stat(skill, { bigint: true });
+    assert.equal(after.mtimeNs, before.mtimeNs, '--check 不应改写 SKILL.md');
+    await assert.rejects(stat(path.join(workDir, 'dist')), (error) => error && error.code === 'ENOENT');
+
+    const template = path.join(workDir, 'skills', 'collab', 'SKILL.template.md');
+    const text = await readFile(template, 'utf8');
+    await writeFile(template, text.replace('# agent-collab：设计端流程', '# agent-collab：设计端流程（改）'));
+    const changed = spawnSync(process.execPath, [path.join(workDir, 'scripts', 'build.mjs'), '--check'], {
+      cwd: workDir,
+      encoding: 'utf8',
+    });
+    assert.equal(changed.status, 1, '模板改动后应退出 1；stdout：' + changed.stdout + '；stderr：' + changed.stderr);
+    assert.match(changed.stdout + changed.stderr, /不一致/);
+
+    await rm(skill, { force: true });
+    const missing = spawnSync(process.execPath, [path.join(workDir, 'scripts', 'build.mjs'), '--check'], {
+      cwd: workDir,
+      encoding: 'utf8',
+    });
+    assert.equal(missing.status, 1, '文件不存在时应退出 1；stdout：' + missing.stdout + '；stderr：' + missing.stderr);
+    assert.match(missing.stdout + missing.stderr, /不存在/);
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }

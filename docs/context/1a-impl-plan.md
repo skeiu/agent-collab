@@ -160,3 +160,9 @@
   - 隔离：对照 `s4-rework-baseline.txt`，只有 `core/adapters/dsh.mjs`、`core/doctor.mjs` 和测试（`dsh-acp`、`doctor`、两个 helper、`adapter-dsh` 集成脚本）变了；profiles 的哈希、用户 dsh Web 的进程号不变，`~/.agent-collab` 不存在。会话日志：开工前切到 `workspace-write`、审批 `ask`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
   - 重跑：`npm test` 3 次 197/197，每次约 16.6 秒；`adapter-dsh` 集成脚本 `RESULT: 通过`（I3 新增 `!!js` 断言）；`npm run build` 退出码 0。反证：副本里给 `loadYamlLibrary` 加回 `yaml` 包的退路，“只有 yaml 包”用例失败（`'done' !== 'failed'`）。
   - 实现：`js-yaml` 改为只在 dsh 包目录及其上层的 `node_modules` 里找（不经 Node 的全局路径）；覆盖层内容生成好之后才建目录。doctor 文字输出按 level 印 `INFO`、`WARN`、`FAIL`，连接桥接用 `SUPPORTED_PROTOCOL` 和 `package.json` 的版本。
+- 2026-10-25 S5 中 dsh 的部分（[briefs/1a-s5-skill-render.md](briefs/1a-s5-skill-render.md)）由 Claude 按用户授权派发，dsh 交付，验收通过：SA1–SA5 全部通过；S5 的验收标准（`SKILL.md` 与渲染一致、`claude --plugin-dir` 加载后 `/agent-collab:collab` 可用、`allowed-tools` 窄规则生效）全部满足。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `s5-baseline.txt`，代码只有 `core/doctor.mjs`、`scripts/build.mjs`、`tests/build.test.mjs`、`tests/doctor.test.mjs` 变了，另新增 `core/render-skill.mjs`、`skills/collab/SKILL.md`、`.claude-plugin/plugin.json`、`tests/render-skill.test.mjs`；profiles 的哈希、用户 dsh Web 的进程号不变，`~/.agent-collab` 不存在。会话日志：开工前切到 `workspace-write`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
+  - 重跑：`npm test` 3 次 213/213，无残留进程；`npm run build` 第二次不改 `SKILL.md` 的修改时间，`--check` 退出码 0，副本里改模板一个字后退出码 1。反证：副本里改成循环替换，“替换只做一遍”用例失败。`chmod 644` 的副本里（默认参数和 Node 20 模拟参数）失败的 22 项都是已知的假 dsh 安装问题（`找不到可用的 dsh`），留给 [briefs/1a-ci-fix-s4.md](briefs/1a-ci-fix-s4.md)。
+  - 插件实测（Claude Code 2.1.309，`claude -p --plugin-dir`，Haiku，临时 git 仓库，PATH 上没有 dsh）：`/agent-collab:collab` 在命令和 skill 列表里；skill 按预检第 1 步运行 `doctor --json --designer claude`，不经审批；同一插件的 `scripts/build.mjs --check` 被拒。花费约 0.01 美元。
+  - 任务书没写死、dsh 自定的：文字输出最后一行 `[FLOW] flow：<JSON>`；项目配置有没生效的项时也出 `config` 检查项，`flow` 照常给出；`parseHost` 返回 `{ variables, slots }`。Claude 认为合理，已回填 protocol.md §6。
+  - 回填：protocol.md §6，dev-setup.md（构建、`--check`、1a 手动安装步骤）。

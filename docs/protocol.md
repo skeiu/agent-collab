@@ -372,10 +372,10 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 - `git`：`{ isRepo, root, head, branch, dirty: [路径] }`，供设计端做 D10 的预检。
 - `dsh`：`{ command, version, home, profile, webRunning, bridge: { online, discoveryFile, protocol, bridgeVersion, problem }, agentPresets }`。
 - `activeRun`：本仓库进行中的任务 `{ runId, status }`，没有时为 `null`，供 D23 的预检。
-- `flow`：按全局和项目两级合并后的流程配置，供 skill 决定派发和返工：`{ designer, executor, confirmBeforeDispatch, maxCorrectionRounds, commitOnAccept, warnSameAgentPair }`。`designer` 取 `--designer`，没给时为 `null`；`executor` 为 `executorByDesigner[designer]`，没给 `--designer` 时为 `null`。配置读不出来时 `flow` 为 `null`，另有一条 `config` 检查项（`warn`）说明原因。
+- `flow`：按全局和项目两级合并后的流程配置，供 skill 决定派发和返工：`{ designer, executor, confirmBeforeDispatch, maxCorrectionRounds, commitOnAccept, warnSameAgentPair }`。`designer` 取 `--designer`，没给时为 `null`；`executor` 为 `executorByDesigner[designer]`，没给 `--designer` 时为 `null`。配置读不出来时 `flow` 为 `null`，另有一条 `config` 检查项（`warn`）说明原因；项目配置里有放宽或越权、因此没生效的项时，同样出一条 `config` 检查项列出这些键，`flow` 照常按生效的值给出。
 - 1a 的检查项只有：Node 和 git 的版本、是否 git 仓库、工作区是否干净、dsh 的位置和版本、dsh Web 是否在运行、桥接是否在线和协议是否兼容、`agent-collab` 预设是否可用、本仓库有没有进行中的任务。
 - 1a 的 `id` 和 `level`：`node`、`git`、`repo`、`dsh` 为 `error`；`worktree_clean`、`bridge`、`agent_preset`、`active_run`、`config`（配置文件读不出来或校验失败时才出现）为 `warn`（工作区不干净和已有任务由设计端按 D10、D23 处理；桥接不在线还可以自动启动或退回 acp）；`dsh_web` 为 `info`。`dsh.transport` 为 `bridge` 时，`bridge` 升为 `error`。
 - `dsh.webRunning`：发现文件在线为 `true`；profile 里装了桥接但没有在线的发现文件为 `false`；没装桥接、判断不了时为 `null`（PLAN.md §4.3）。`dsh.bridge` 另带 `installed`（profile 里是否装了桥接）。
 - 退出码：顶层 `ok` 为 true 时 0；为 false 时 1，并带 `error: { code: "doctor_failed", message }`，`message` 取第一个失败的 `error` 级检查项。`checks` 等字段照常输出。
 - `info` 级的项不影响顶层 `ok`；`dsh_web` 的 `ok` 表示判断得出（`webRunning` 不为 `null`）。
-- 不带 `--json` 时每项打印一行给人看：行首标记通过的为 `OK`，没通过的按 `level` 为 `FAIL`、`WARN`、`INFO`，退出码相同。`--deep` 1a 不做，以用法错误（退出码 2）退出并提示尚未实现。
+- 不带 `--json` 时每项打印一行给人看：`[标记] id：说明`，通过的标记为 `OK`，没通过的按 `level` 为 `FAIL`、`WARN`、`INFO`；最后一行是 `[FLOW] flow：<flow 的 JSON 或 null>`；退出码相同。`--deep` 1a 不做，以用法错误（退出码 2）退出并提示尚未实现。

@@ -1,4 +1,4 @@
-// 本文件：仓库构建入口。定位仓库根目录，逐项执行构建步骤；当前只实现“打包桥接 .tgz”，其余两步仍报告尚未实现。
+// 本文件：仓库构建入口。定位仓库根目录，生成 skills/collab/SKILL.md、打包桥接 .tgz；--check 只核对生成物，不写文件。
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -6,15 +6,22 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { renderSkill } from '../core/render-skill.mjs';
+
 /** 仓库根目录：本文件位于 <仓库>/scripts/，因此上跳一层。 */
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const bridgeDir = path.join(repoRoot, 'dsh-bridge');
+const skillFile = path.join(repoRoot, 'skills', 'collab', 'SKILL.md');
+const skillTemplate = path.join(repoRoot, 'skills', 'collab', 'SKILL.template.md');
+const skillHost = path.join(repoRoot, 'skills', 'collab', 'hosts', 'claude.md');
 
 function parseArgs(argv) {
-  const options = { out: path.join(repoRoot, 'dist') };
+  const options = { out: path.join(repoRoot, 'dist'), check: false };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === '--out') {
+    if (arg === '--check') {
+      options.check = true;
+    } else if (arg === '--out') {
       const value = argv[index + 1];
       if (value === undefined || value.length === 0) throw new Error('--out requires a directory');
       options.out = path.resolve(value);
@@ -28,6 +35,25 @@ function parseArgs(argv) {
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
+}
+
+function renderSkillFile() {
+  const template = fs.readFileSync(skillTemplate, 'utf8');
+  const host = fs.readFileSync(skillHost, 'utf8');
+  return { file: skillFile, text: renderSkill({ template, host, hostName: 'claude' }) };
+}
+
+function writeSkillIfChanged(file, text) {
+  let current = null;
+  try {
+    current = fs.readFileSync(file, 'utf8');
+  } catch (error) {
+    if (!error || error.code !== 'ENOENT') throw error;
+  }
+  if (current === text) return false;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, text);
+  return true;
 }
 
 function packBridge(outDir) {
@@ -74,7 +100,12 @@ const steps = [
   {
     name: '生成 SKILL.md',
     output: 'skills/collab/SKILL.md',
-    note: '由 SKILL.template.md 与 hosts/<设计端>.md 渲染（core/render-skill.mjs，PLAN.md §7.1）',
+    note: '由 SKILL.template.md 与 hosts/claude.md 渲染（core/render-skill.mjs，PLAN.md §7.1）',
+    run: () => {
+      const rendered = renderSkillFile();
+      const changed = writeSkillIfChanged(rendered.file, rendered.text);
+      return rendered.file + (changed ? '（已更新）' : '（无变化）');
+    },
   },
   {
     name: '打包桥接 .tgz',
@@ -91,6 +122,26 @@ const steps = [
 
 function main() {
   const options = parseArgs(process.argv.slice(2));
+  if (options.check) {
+    const rendered = renderSkillFile();
+    let current;
+    try {
+      current = fs.readFileSync(rendered.file, 'utf8');
+    } catch (error) {
+      if (error && error.code === 'ENOENT') {
+        console.log('skills/collab/SKILL.md 不存在，请运行 npm run build。');
+        return 1;
+      }
+      throw error;
+    }
+    if (current !== rendered.text) {
+      console.log('skills/collab/SKILL.md 与模板渲染结果不一致，请运行 npm run build。');
+      return 1;
+    }
+    console.log('skills/collab/SKILL.md 与模板渲染结果一致。');
+    return 0;
+  }
+
   console.log('仓库根目录：' + repoRoot);
   console.log('构建步骤：共 ' + steps.length + ' 项。');
   for (const step of steps) {
@@ -105,6 +156,12 @@ function main() {
     console.log('    产物：' + output);
   }
   console.log('构建结束。');
+  return 0;
 }
 
-main();
+try {
+  process.exitCode = main();
+} catch (error) {
+  console.error('构建失败：' + (error && error.message ? error.message : String(error)));
+  process.exitCode = 1;
+}

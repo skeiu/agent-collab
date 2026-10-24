@@ -1,0 +1,7 @@
+{
+  "name": "agent-collab",
+  "version": "0.0.0",
+  "description": "让多个编程代理按设计端 / 执行端分工协作的 Claude Code 插件",
+  "license": "MIT",
+  "repository": "https://github.com/skeiu/agent-collab"
+}
