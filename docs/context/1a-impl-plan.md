@@ -197,3 +197,5 @@
   - 第一次交付时，新加的“Web 重启后续接”用例在符号链接 `TMPDIR` 下失败（假 dsh 保存的会话 cwd 没解析），推送后 macOS 会红；Claude 退回同一会话修正，只改了 `tests/bridge.test.mjs`。
   - 改法：桥接在 `session/new` 返回前把会话的 `env` 写进 `$DSH_HOME/agent-collab/session-env/<sessionId>.json`（目录 0700、文件 0600），dsh 的 `agent/created` 全局事件（创建和恢复都会发，见 dsh-agent 的 `agents.announce()`）和桥接启动时按会话 id 读回登记；agent 卸载、桥接停止只清内存；`session/close` 删文件。dsh 的 `appendPluginRecord` 是实验接口、限 dsh 仓库内部使用，没有采用。适配器主动关闭的连接打标记，`close` 处理不再记断线；acp `resume` 失败时关新建的 client。protocol.md 补了 §1.1（用户未审阅）。
   - 留下的问题：运行时正常结束任务时不发 `session/close`，会话环境文件会一直积累（[RISKS.md](RISKS.md) R14）。
+  - 换上新桥接后在用户的 Web 上实测：第 1 轮、按 PID 重启后 `run resume`、再重启后人在 Web 里直接发消息，执行端 shell 里都是 `role=executor`（见 [1a-acceptance.md](1a-acceptance.md) T17）。
+  - 推送后 CI 运行 40121813847（`e0364bd`）：macOS 两组变绿，五组通过；Windows LTS 1 项失败：`run-finalize.test.mjs`“run wait 返回时它启动的工作进程都已退出”，`worker.log` 去重后只有一个 pid。和 `965ca04` 那次是同一个用例，Claude 判断是用例按 pid 去重计数、Windows 复用 PID（把握：中）。修复任务书 [briefs/1a-fix5-finalize-flake.md](briefs/1a-fix5-finalize-flake.md)。
