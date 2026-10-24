@@ -151,6 +151,62 @@ export function createDshApi(ctx) {
   const profileName = resolveProfileName(ctx);
   const dshVersion = resolveDshVersion(ctx);
 
+  // 每个会话的环境值单独存放；提供者按变量名各注册一次，且注册在桥接插件的根上下文上。
+  // 不能按会话注册：dsh 的 ShellEnvRegistry 规定一个键只能有一个提供者，且会话上下文卸载时
+  // 会连带释放注册，会误伤其他会话。
+  const sessionEnvBySession = new Map();
+  const sessionEnvProviders = new Map();
+  ctx.effect(() => () => {
+    for (const provider of sessionEnvProviders.values()) {
+      try { provider.dispose?.(); } catch { /* 已随上下文释放。 */ }
+    }
+    sessionEnvProviders.clear();
+    sessionEnvBySession.clear();
+  });
+
+  function ensureSessionEnvProvider(key) {
+    if (sessionEnvProviders.has(key)) return;
+    const service = ctx.get('shellEnv');
+    if (service === undefined || typeof service.register !== 'function') return;
+    const contributor = {
+      name: 'agent-collab-env-' + key,
+      variables: { [key]: { description: 'agent-collab executor environment' } },
+      resolve: (execution) => {
+        const agent = execution && execution.agent;
+        const sessionId = agent && typeof agent.id === 'string' ? agent.id : null;
+        if (sessionId === null) return {};
+        const values = sessionEnvBySession.get(sessionId);
+        if (values === undefined || !Object.hasOwn(values, key)) return {};
+        return { [key]: values[key] };
+      },
+    };
+    const dispose = service.register(contributor);
+    sessionEnvProviders.set(key, { contributor, dispose });
+  }
+
+  function setSessionEnv(sessionId, env) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(env ?? {})) {
+      if (typeof value !== 'string') continue;
+      normalized[key] = value;
+      ensureSessionEnvProvider(key);
+    }
+    sessionEnvBySession.set(sessionId, normalized);
+  }
+
+  function clearSessionEnv(sessionId) {
+    sessionEnvBySession.delete(sessionId);
+  }
+
+  try {
+    ctx.on('agent/disposed', (payload) => {
+      const agent = payload && payload.agent;
+      if (agent && typeof agent.id === 'string') clearSessionEnv(agent.id);
+    }, { global: true });
+  } catch {
+    // 旧 dsh 没有 agent/disposed 时，session/close 仍会清理。
+  }
+
   const api = {
     homeDir,
     profileName,
@@ -247,26 +303,18 @@ export function createDshApi(ctx) {
       }
     },
 
-    async attachWorkspace(cwd, title, sessionId) {
+    async attachWorkspace(cwd, sessionId) {
       const registry = ctx.get('workspaceRegistry');
       if (registry === undefined) return null;
-      const workspace = await registry.create(cwd, title);
+      // 不传标题，让 dsh 按它自己的规则取目录名（dsh-workspace 的 createCanonical 会调用
+      // defaultWorkspaceTitle(canonical)）；已有工作区也不会被改名。
+      const workspace = await registry.create(cwd);
       await workspace.attachSession(sessionId);
       return workspace.id;
     },
 
-    registerSessionEnv(agentCtx, agent, env) {
-      if (!env || Object.keys(env).length === 0) return;
-      const service = agentCtx.get('shellEnv');
-      if (service === undefined || typeof service.register !== 'function') return;
-      const variables = {};
-      for (const key of Object.keys(env)) variables[key] = { description: 'agent-collab executor environment' };
-      service.register({
-        name: 'agent-collab-' + agent.id,
-        variables,
-        resolve: (execution) => execution.agent === agent ? { ...env } : {},
-      });
-    },
+    setSessionEnv,
+    clearSessionEnv,
 
     async listPermissionPresetSpecs() {
       const service = ctx.get('permissionPresets');
@@ -433,7 +481,6 @@ export function createDshApi(ctx) {
       setTitle(title) { return api.setSessionTitle(session, title); },
       applyPermission(mapped) { return api.applyPermission(session, mapped); },
       permissionSnapshot(mapped) { return api.permissionSnapshot(session, mapped); },
-      registerEnv(agentCtx, env) { return api.registerSessionEnv(agentCtx, agent, env); },
       waitForChildren() { return api.waitForChildren(agent); },
     };
     viewCache.set(agent, view);

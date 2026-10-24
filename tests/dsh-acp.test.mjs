@@ -7,6 +7,7 @@ import { test } from 'node:test';
 
 import { selectOverlayEntries } from '../core/adapters/dsh.mjs';
 import { createDshCase, reportObject, reportText } from './helpers/dsh-case.mjs';
+import { pidAlive, waitForPidGone } from './helpers/pids.mjs';
 
 const webPatch = JSON.stringify([
   { id: 'llm-fake', config: { providers: { fake: { displayName: 'Fake', api: 'openai-completions', baseURL: 'http://127.0.0.1:9/v1', models: [{ id: 'fake-model', name: 'Fake' }] } } } },
@@ -16,6 +17,16 @@ const webPatch = JSON.stringify([
 
 function acpScript(report = reportObject(), extra = {}) {
   return JSON.stringify({ updates: [reportText(report)], ...extra });
+}
+
+async function waitForStatus(caseApi, runId, status, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const state = await caseApi.state(runId).catch(() => null);
+    if (state && state.status === status) return state;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  throw new Error('timed out waiting for status ' + status);
 }
 
 test('覆盖层挑选：只有服务商、只有默认模型、两者都有、无关条目、明确指定模型', () => {
@@ -67,6 +78,30 @@ test('acp 模式：没有 cordis.patch.yml 且找不到 js-yaml 时任务 failed
   assert.equal(wait.json.statusReason, 'overlay_yaml_unavailable', wait.stdout + wait.stderr);
   const overlays = await fsp.readdir(path.join(caseApi.home, 'overlays')).catch(() => []);
   assert.deepEqual(overlays.filter((name) => name.startsWith('dsh-acp-')), [], '失败时不应留下覆盖层目录');
+});
+
+test('acp 模式：session/new 失败后任务 failed（executor_error），工作进程退出', async (t) => {
+  const caseApi = await createDshCase('acp-new-session-error', {
+    config: { dsh: { home: null, profile: 'web', transport: 'acp' } },
+    env: { FAKE_ACP_SCRIPT: JSON.stringify({ failSessionNew: 'session/new failed for test' }) },
+  });
+  let workerPid = null;
+  t.after(async () => {
+    if (Number.isInteger(workerPid) && pidAlive(workerPid)) {
+      try { process.kill(workerPid, 'SIGKILL'); } catch { /* 已退出。 */ }
+      await waitForPidGone(workerPid, 2000);
+    }
+    await caseApi.cleanup();
+  });
+  await caseApi.writeWebPatch(webPatch);
+  const started = await caseApi.startTask();
+  const state = await waitForStatus(caseApi, started.runId, 'failed');
+  workerPid = state.worker && Number.isInteger(state.worker.pid) ? state.worker.pid : started.workerPid;
+  assert.equal(state.statusReason, 'executor_error');
+  const gone = await waitForPidGone(workerPid, 3000);
+  const log = await fsp.readFile(path.join(await caseApi.runDir(started.runId), 'worker.log'), 'utf8');
+  assert.match(log, /任务结束：failed（executor_error）/);
+  assert.equal(gone, true, '任务 failed 后工作进程仍未退出（pid ' + workerPid + '）');
 });
 
 test('acp 模式：子进程参数、环境、覆盖层内容和 close 后删除', async (t) => {

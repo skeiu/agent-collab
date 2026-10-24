@@ -52,6 +52,7 @@ function createAgentPeer(readable, writable, label) {
   }));
 
   peer.onRequest('session/new', (params) => {
+    if (script.failSessionNew) throw new Error(script.failSessionNew === true ? 'session/new failed for test' : String(script.failSessionNew));
     sessionCounter += 1;
     activeSessionId = 'fake-session-' + sessionCounter;
     return { sessionId: activeSessionId, configOptions: [], _meta: params && params._meta };

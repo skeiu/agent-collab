@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { createAdapter } from '../core/adapters/dsh.mjs';
 import { JsonRpcPeer } from '../core/jsonrpc.mjs';
 import { createDshCase, reportObject, reportText, turnWithReport } from './helpers/dsh-case.mjs';
+import { pidAlive, waitForPidGone } from './helpers/pids.mjs';
 import { runDiagnostics } from './helpers/run-harness.mjs';
 
 const fence = String.fromCharCode(96).repeat(3);
@@ -21,6 +22,16 @@ async function waitForEvent(caseApi, runId, predicate, timeout = 5000) {
     await new Promise((resolve) => setTimeout(resolve, 30));
   }
   throw new Error('timed out waiting for event');
+}
+
+async function waitForStatus(caseApi, runId, status, timeout = 10000) {
+  const deadline = Date.now() + timeout;
+  while (Date.now() < deadline) {
+    const state = await caseApi.state(runId).catch(() => null);
+    if (state && state.status === status) return state;
+    await new Promise((resolve) => setTimeout(resolve, 30));
+  }
+  throw new Error('timed out waiting for status ' + status);
 }
 
 test('桥接模式：任务 done，session/new 参数、env 过滤、cursor 和标题正确', async (t) => {
@@ -61,6 +72,29 @@ test('桥接模式：任务 done，session/new 参数、env 过滤、cursor 和�
   const cursors = events.filter((item) => item.type === 'text' || item.type === 'tool_call' || item.type === 'tool_result' || item.type === 'turn_end').map((item) => item.cursor.seq);
   for (let index = 1; index < cursors.length; index += 1) assert.ok(cursors[index] >= cursors[index - 1], 'cursor 不单调');
   assert.ok(wait.summary.warnings.some((message) => message.includes('OTHER')), '被丢弃的 env 键应有一条 warning');
+});
+
+test('桥接模式：session/new 失败后任务 failed（executor_error），工作进程退出', async (t) => {
+  const caseApi = await createDshCase('bridge-new-session-error');
+  let workerPid = null;
+  let workerGone = true;
+  t.after(async () => {
+    if (Number.isInteger(workerPid) && pidAlive(workerPid)) {
+      try { process.kill(workerPid, 'SIGKILL'); } catch { /* 已退出。 */ }
+      await waitForPidGone(workerPid, 2000);
+    }
+    await caseApi.cleanup();
+  });
+  await caseApi.profile({ dependencies: { 'dsh-bridge': 'file:x' }, dsh: { profile: { bundles: ['dsh-bridge'] } } });
+  await caseApi.startWeb({ createError: 'session/new failed for test' });
+  const started = await caseApi.startTask();
+  const state = await waitForStatus(caseApi, started.runId, 'failed');
+  workerPid = state.worker && Number.isInteger(state.worker.pid) ? state.worker.pid : started.workerPid;
+  assert.equal(state.statusReason, 'executor_error');
+  workerGone = await waitForPidGone(workerPid, 3000);
+  const log = await fsp.readFile(path.join(await caseApi.runDir(started.runId), 'worker.log'), 'utf8');
+  assert.match(log, /任务结束：failed（executor_error）/);
+  assert.equal(workerGone, true, '任务 failed 后工作进程仍未退出（pid ' + workerPid + '）');
 });
 
 test('桥接模式：在 dsh Web 里停止的一轮记为 stopped_by_human', async (t) => {
@@ -220,6 +254,39 @@ test('attach 的 finalText 与不杀工作进程时算出的结果完全相同',
   const attachedResult = attached.turn ? await attached.turn : attached.result;
   await second.close();
   assert.equal(attachedResult.finalText, baselineResult.finalText);
+});
+
+test('桥接 session/new 失败时适配器关闭连接', async (t) => {
+  const caseApi = await createDshCase('bridge-new-session-socket');
+  t.after(() => caseApi.cleanup());
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.setNoDelay(true);
+    const peer = new JsonRpcPeer({ readable: socket, writable: socket, name: 'fake-bridge-new-session-error' });
+    peer.onRequest('initialize', () => ({ protocolVersion: 1, agentInfo: { name: 'x', version: '0' }, agentCapabilities: { promptCapabilities: { image: false } } }));
+    peer.onRequest('session/new', () => { throw new Error('session/new failed for test'); });
+    peer.onRequest('session/prompt', () => new Promise(() => {}));
+  });
+  const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  const file = path.join(caseApi.dshHome, 'agent-collab', 'bridge-web.json');
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, JSON.stringify({
+    v: 1, host: '127.0.0.1', port, token: 't', pid: process.pid, protocol: 1, protocolMin: 1,
+    bridgeVersion: '0.0.0', dshVersion: '0.2.1', profile: 'web', startedAt: new Date().toISOString(),
+  }));
+  const config = { dsh: { home: caseApi.dshHome, profile: 'web', transport: 'bridge', autoStartWeb: false }, executors: { dsh: { command: caseApi.fake.link } }, permissionPreset: 'workspace-write', unattendedApproval: 'deny', inheritEnv: 'designer' };
+  const adapter = createAdapter({ config, onEvent: () => {}, env: {}, state: { repoRoot: caseApi.repo, executor: {} } });
+  try {
+    await assert.rejects(adapter.start({ cwd: caseApi.repo, runId: 'T001', title: 'x', brief: 'x', options: { permissionPreset: 'workspace-write', unattendedApproval: 'deny', agentPreset: 'agent-collab' }, env: {} }), /session\/new failed for test/);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(sockets.size, 0, 'session/new 失败后适配器没有关闭 TCP 连接');
+  } finally {
+    for (const socket of sockets) socket.destroy();
+    await adapter.close().catch(() => {});
+    await new Promise((resolve) => server.close(resolve));
+  }
 });
 
 test('桥接连接被对端重置时适配器关闭底层 socket，不留句柄', async (t) => {

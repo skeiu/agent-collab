@@ -89,6 +89,10 @@ function sessionMeta(extra = {}) {
   };
 }
 
+function requestContains(fake, text) {
+  return fake.requests.some((record) => JSON.stringify(record.body && record.body.messages ? record.body.messages : []).includes(text));
+}
+
 async function connectAndInitialize(discovery) {
   const client = await AcpClient.connectTcp({ host: discovery.host, port: discovery.port });
   await client.initialize({
@@ -101,7 +105,11 @@ async function main() {
   const box = createSandbox('bridge-dsh');
   const responses = [
     { toolCalls: [{ name: 'bash', arguments: { command: 'printf "%s" "__ROLE_ENV__"', description: 'Print the injected role' } }] },
-    { text: 'ROLE_OK' },
+    { text: 'FIRST_ROLE_OK' },
+    { toolCalls: [{ name: 'bash', arguments: { command: 'printf "%s|%s" "$DSH_AGENT_COLLAB_ROLE" "$DSH_AGENT_COLLAB_MARK"', description: 'Print the second session environment' } }] },
+    { text: 'SECOND_SESSION_OK' },
+    { toolCalls: [{ name: 'bash', arguments: { command: 'printf "%s|%s" "$DSH_AGENT_COLLAB_ROLE" "$DSH_AGENT_COLLAB_MARK"', description: 'Print the third session environment' } }] },
+    { text: 'THIRD_SESSION_OK' },
     { toolCalls: [{ name: 'write', arguments: { file_path: '', content: 'outside', sandbox_permissions: 'danger-full-access', justification: 'The integration test needs to write one file outside the workspace.' } }] },
     { text: 'WRITE_DONE' },
     { text: 'CANCEL_ME', delayMs: 2500 },
@@ -135,9 +143,11 @@ async function main() {
     unpack(addTestPlugin, 'dsh plugin add 测试插件');
 
     const work = path.join(box.root, 'workspace');
+    const work2 = path.join(box.root, 'workspace-2');
     fs.mkdirSync(work, { recursive: true });
+    fs.mkdirSync(work2, { recursive: true });
     const outside = path.join(box.root, 'outside.txt');
-    responses[2].toolCalls[0].arguments.file_path = outside;
+    responses[6].toolCalls[0].arguments.file_path = outside;
     fs.writeFileSync(path.join(box.home, 'profiles', 'web', 'cordis.patch.yml'), profilePatch(fake.url));
 
     web = await startWeb(box.env, dsh, { cwd: work });
@@ -167,31 +177,73 @@ async function main() {
     if (created._meta.agentCollab.workspaceId === null) fail('会话没有挂到工作区');
     if (created._meta.agentCollab.permission.sandbox !== 'read-only') fail('权限不是 read-only');
 
+    const created2 = await client.newSession({
+      cwd: work,
+      mcpServers: [],
+      _meta: { agentCollab: sessionMeta({
+        runId: 'T002',
+        title: '[collab] T002 同目录第二个会话',
+        env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'two' },
+      }) },
+    });
+    if (created2._meta.agentCollab.workspaceId !== created._meta.agentCollab.workspaceId) fail('同一 cwd 的第二个会话没有复用工作区');
+    const created3 = await client.newSession({
+      cwd: work2,
+      mcpServers: [],
+      _meta: { agentCollab: sessionMeta({
+        runId: 'T003',
+        title: '[collab] T003 另一个目录',
+        env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'three' },
+      }) },
+    });
+    if (created3._meta.agentCollab.workspaceId === null || created3._meta.agentCollab.workspaceId === created._meta.agentCollab.workspaceId) fail('另一个 cwd 没有创建独立工作区');
+
     const observerFile = path.join(box.home, 'test-observer.json');
+    const realWork = fs.realpathSync(work);
+    const realWork2 = fs.realpathSync(work2);
     const observer = await waitFor(() => {
       try {
         const data = JSON.parse(fs.readFileSync(observerFile, 'utf8'));
         const observed = data.sessions.find((item) => item.id === created.sessionId);
-        const workspace = data.workspaces.find((item) => item.id === created._meta.agentCollab.workspaceId);
-        return observed && workspace && workspace.sessionIds.includes(created.sessionId) ? data : null;
+        const observed2 = data.sessions.find((item) => item.id === created2.sessionId);
+        const observed3 = data.sessions.find((item) => item.id === created3.sessionId);
+        const workspace = data.workspaces.find((item) => item.path === realWork);
+        const workspace2 = data.workspaces.find((item) => item.path === realWork2);
+        return observed && observed2 && observed3 && workspace && workspace2
+          && workspace.sessionIds.includes(created.sessionId)
+          && workspace.sessionIds.includes(created2.sessionId)
+          && workspace2.sessionIds.includes(created3.sessionId) ? data : null;
       } catch {
         return null;
       }
-    }, 10000, '测试插件报告会话和工作区');
+    }, 15000, '测试插件报告三个会话和工作区');
     const observed = observer.sessions.find((item) => item.id === created.sessionId);
     if (observed.preset !== 'agent-collab') fail('测试插件报告的预设不是 agent-collab');
+    const workspace = observer.workspaces.find((item) => item.path === realWork);
+    const workspace2 = observer.workspaces.find((item) => item.path === realWork2);
+    if (workspace.title !== path.basename(work)) fail('新工作区标题不是目录名：' + workspace.title);
+    if (workspace2.title !== path.basename(work2)) fail('另一个新工作区标题不是目录名：' + workspace2.title);
 
     const rolePrompt = await client.promptText(created.sessionId, 'Check the role environment variable.', { timeoutMs: 120000 });
     if (rolePrompt._meta.agentCollab.endReason !== 'completed') fail('第一次 prompt 没有正常结束');
-    const toolResultMessage = fake.requests[1] && fake.requests[1].body && fake.requests[1].body.messages.at(-1);
-    if (!toolResultMessage || !String(toolResultMessage.content).includes('executor')) fail('DSH_AGENT_COLLAB_ROLE 没有被注入或工具结果没有回到模型');
+    if (!requestContains(fake, 'executor')) fail('DSH_AGENT_COLLAB_ROLE 没有被注入或工具结果没有回到模型');
+
+    const secondPrompt = await client.promptText(created2.sessionId, 'Check the second session environment.', { timeoutMs: 120000 });
+    if (secondPrompt._meta.agentCollab.endReason !== 'completed') fail('第二个会话的 prompt 没有正常结束');
+    if (!requestContains(fake, 'executor|two')) fail('第二个会话的 shell 环境串了或没有注入');
+
+    await client.closeSession({ sessionId: created2.sessionId });
+    const thirdPrompt = await client.promptText(created3.sessionId, 'Check the third session environment.', { timeoutMs: 120000 });
+    if (thirdPrompt._meta.agentCollab.endReason !== 'completed') fail('第三个会话的 prompt 没有正常结束');
+    if (!requestContains(fake, 'executor|three')) fail('第三个会话的 shell 环境串了或没有注入');
 
     const switched = await client.setConfigOption({ sessionId: created.sessionId, configId: 'model', value: JSON.stringify(['fake', 'fake-model-2']) });
     if (!switched.configOptions.some((option) => option.id === 'model' && option.currentValue === JSON.stringify(['fake', 'fake-model-2']))) fail('session/set_config_option 没有切换到 fake-model-2');
 
     const approvalPrompt = await client.promptText(created.sessionId, 'Write the outside file.', { timeoutMs: 120000 });
     if (approvalPrompt._meta.agentCollab.endReason !== 'completed') fail('审批后 prompt 没有正常结束');
-    if (!fake.requests[2] || !fake.requests[2].body || fake.requests[2].body.model !== 'fake-model-2') fail('切换模型后下一次请求没有使用 fake-model-2');
+    const modelRequest = fake.requests.find((record) => record.body && record.body.model === 'fake-model-2' && JSON.stringify(record.body.messages ?? []).includes('Write the outside file.'));
+    if (!modelRequest) fail('切换模型后下一次请求没有使用 fake-model-2');
     await waitFor(() => fs.existsSync(outside), 5000, '审批后写出的文件');
     const statuses = notifications.filter((item) => item.method === '_agentCollab/status').map((item) => item.params);
     if (!statuses.some((item) => item.kind === 'approval_pending')) fail('没有收到 approval_pending');
@@ -241,7 +293,7 @@ async function main() {
       if (seq > sinceSeq && !replayKeys.has(key)) fail('补发缺少事件：' + key);
     }
 
-    await client.closeSession({ sessionId: created.sessionId });
+    for (const session of [created, created2, created3]) await client.closeSession({ sessionId: session.sessionId });
     await client.close();
     client = null;
 
@@ -249,7 +301,7 @@ async function main() {
     web = null;
     await waitFor(() => !fs.existsSync(discoveryFile), 10000, '退出后删除发现文件');
     passed = true;
-    console.log('RESULT: 通过 — 临时 DSH_HOME 中完成插件安装、发现文件、会话、工具、审批、取消、Web 内停止和重连补发；退出后发现文件已删除。');
+    console.log('RESULT: 通过 — 临时 DSH_HOME 中完成插件安装、三会话环境隔离、工作区命名、工具、审批、取消、Web 内停止和重连补发；退出后发现文件已删除。');
   } finally {
     if (client) await client.close().catch(() => {});
     if (web) await stopChild(web.child).catch(() => {});

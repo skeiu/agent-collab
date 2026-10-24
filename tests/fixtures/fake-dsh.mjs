@@ -6,6 +6,11 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { fileURLToPath } from 'node:url';
 
+/** 与 dsh-workspace 的 defaultWorkspaceTitle 一致：目录最后一段，根路径用根名。 */
+function defaultWorkspaceTitle(cwd) {
+  return path.basename(cwd) || path.parse(cwd).root;
+}
+
 function makeSession(fake, id, cwd, preset) {
   const events = [];
   const session = {
@@ -68,6 +73,7 @@ export function createFakeDsh(options = {}) {
   const agents = new Map();
   const sessionHandlers = [];
   const agentErrorHandlers = [];
+  const agentDisposedHandlers = [];
   const effects = [];
   const fake = {
     home,
@@ -98,6 +104,16 @@ export function createFakeDsh(options = {}) {
     },
     emitAgentError(agent, error) {
       for (const handler of agentErrorHandlers) handler({ agent, error });
+    },
+    collectEnv(sessionId) {
+      return fake.shellEnv.collect({ agent: agents.get(sessionId) });
+    },
+    disposeAgent(sessionId) {
+      const agent = agents.get(sessionId);
+      if (agent === undefined) return false;
+      agents.delete(sessionId);
+      for (const handler of agentDisposedHandlers) handler({ agent });
+      return true;
     },
     makeSession(id, cwd, preset) {
       const session = makeSession(fake, id, cwd, preset);
@@ -132,6 +148,7 @@ export function createFakeDsh(options = {}) {
 
   const agentsService = {
     async create(createOptions) {
+      if (options.createError) throw new Error(String(options.createError));
       const { sessionId } = createOptions;
       const { session, agent } = fake.makeSession(sessionId, createOptions.meta && createOptions.meta.cwd, createOptions.meta && createOptions.meta.agentPreset);
       agent.options = createOptions.agentOptions ?? {};
@@ -169,7 +186,41 @@ export function createFakeDsh(options = {}) {
   };
 
   fake.shellEnv = {
-    register(entry) { fake.registeredEnv.push(entry); },
+    contributors: new Map(),
+    keyOwners: new Map(),
+    register(entry) {
+      const name = entry && typeof entry.name === 'string' ? entry.name : '';
+      if (name.trim().length === 0) throw new Error('bash env contributor name must be non-empty');
+      if (fake.shellEnv.contributors.has(name)) throw new Error('bash env contributor "' + name + '" is already registered');
+      const variables = Object.entries(entry.variables ?? {});
+      for (const [key, variable] of variables) {
+        if (!/^DSH_[A-Z][A-Z0-9_]*$/.test(key)) throw new Error('bash env contributor "' + name + '" declared invalid key "' + key + '"');
+        if (!variable || typeof variable.description !== 'string' || variable.description.trim().length === 0) {
+          throw new Error('bash env contributor "' + name + '" must describe "' + key + '"');
+        }
+        const owner = fake.shellEnv.keyOwners.get(key);
+        if (owner !== undefined) throw new Error('bash env key "' + key + '" is already owned by contributor "' + owner + '"; contributor "' + name + '" cannot also own it');
+      }
+      fake.shellEnv.contributors.set(name, entry);
+      for (const [key] of variables) fake.shellEnv.keyOwners.set(key, name);
+      fake.registeredEnv.push(entry);
+      return () => {
+        fake.shellEnv.contributors.delete(name);
+        for (const [key] of variables) fake.shellEnv.keyOwners.delete(key);
+      };
+    },
+    collect(execution) {
+      const values = {};
+      for (const entry of [...fake.shellEnv.contributors.values()].sort((left, right) => left.name.localeCompare(right.name))) {
+        const resolved = typeof entry.resolve === 'function' ? entry.resolve(execution) : {};
+        for (const [key, value] of Object.entries(resolved ?? {})) {
+          if (!Object.hasOwn(entry.variables ?? {}, key)) throw new Error('bash env contributor "' + entry.name + '" returned undeclared key "' + key + '"');
+          if (typeof value !== 'string') throw new Error('bash env contributor "' + entry.name + '" returned a non-string value for "' + key + '"');
+          values[key] = value;
+        }
+      }
+      return values;
+    },
   };
 
   const permissionPresets = {
@@ -201,7 +252,7 @@ export function createFakeDsh(options = {}) {
     async create(cwd, title) {
       let record = fake.workspaces.find((item) => item.path === cwd);
       if (!record) {
-        record = { id: 'ws-' + (fake.workspaces.length + 1), title, path: cwd, sessionIds: new Set(), attachSession(id) { this.sessionIds.add(id); } };
+        record = { id: 'ws-' + (fake.workspaces.length + 1), title: title ?? defaultWorkspaceTitle(cwd), path: cwd, sessionIds: new Set(), attachSession(id) { this.sessionIds.add(id); } };
         fake.workspaces.push(record);
       }
       return record;
@@ -255,6 +306,7 @@ export function createFakeDsh(options = {}) {
     on(event, handler, eventOptions) {
       if (event === 'session/event') sessionHandlers.push(handler);
       else if (event === 'agent/error') agentErrorHandlers.push(handler);
+      else if (event === 'agent/disposed') agentDisposedHandlers.push(handler);
       void eventOptions;
       return () => {};
     },
@@ -331,12 +383,9 @@ export function createFakeDsh(options = {}) {
     mountedPresets: fake.mountedPresets,
     titles: fake.titles,
     permissionSets: fake.permissionSets,
-    registeredEnv: fake.registeredEnv.map((entry) => {
-      const sessionId = String(entry.name ?? '').replace(/^agent-collab-/, '');
-      const agent = fake.agents.get(sessionId);
-      let resolved = null;
-      try { resolved = typeof entry.resolve === 'function' ? entry.resolve({ agent }) : null; } catch { resolved = null; }
-      return { sessionId, variables: Object.keys(entry.variables ?? {}), resolved };
+    registeredEnv: [...sessions.keys()].map((sessionId) => {
+      const resolved = fake.shellEnv.collect({ agent: agents.get(sessionId) });
+      return { sessionId, variables: Object.keys(resolved), resolved };
     }),
   });
 

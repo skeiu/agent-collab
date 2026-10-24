@@ -220,6 +220,71 @@ test('session/new：参数校验、预设选择和退回、权限的两种设法
   }
 });
 
+test('同一进程里的多个会话：shell 环境相互隔离，关闭一个后不再注入', async () => {
+  const box = await startBridge();
+  try {
+    const client = await connect(box.discovery);
+    await initialize(client, box.discovery);
+    const cwdA = workDir(box);
+    const cwdB = workDir(box);
+    const sessionA = await newSession(client, cwdA, {
+      runId: 'T001',
+      title: '[collab] T001 会话 A',
+      env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'one' },
+    });
+    const sessionB = await newSession(client, cwdB, {
+      runId: 'T002',
+      title: '[collab] T002 会话 B',
+      env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'two' },
+    });
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionA.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'one' });
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionB.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'two' });
+
+    const plain = box.fakeDsh.makeSession('plain-session', workDir(box), null).agent;
+    assert.deepEqual(box.fakeDsh.shellEnv.collect({ agent: plain }), {}, '非 agent-collab 会话不应有桥接注入');
+
+    await client.closeSession({ sessionId: sessionA.sessionId });
+    await delay(30);
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionA.sessionId), {}, '关闭后的会话不应继续注入');
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionB.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'two' }, '关闭一个会话不应影响另一个');
+
+    const [sessionC, sessionD] = await Promise.all([
+      newSession(client, workDir(box), { runId: 'T003', title: '[collab] T003 并发 C', env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'three' } }),
+      newSession(client, workDir(box), { runId: 'T004', title: '[collab] T004 并发 D', env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'four' } }),
+    ]);
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionC.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'three' });
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionD.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'four' });
+
+    box.fakeDsh.disposeAgent(sessionB.sessionId);
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionB.sessionId), {}, 'agent 卸载后不应继续注入');
+    assert.deepEqual(box.fakeDsh.collectEnv(sessionC.sessionId), { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'three' });
+    await client.close();
+  } finally {
+    await stopBridge(box);
+  }
+});
+
+test('新工作区用目录名而不是会话标题；已有工作区不改名', async () => {
+  const box = await startBridge();
+  try {
+    const client = await connect(box.discovery);
+    await initialize(client, box.discovery);
+    const cwd = workDir(box);
+    const first = await newSession(client, cwd, { title: '[collab] T001 任务标题' });
+    const workspace = box.fakeDsh.workspaces.find((item) => item.path === cwd);
+    assert.ok(workspace, '应创建对应工作区');
+    assert.equal(workspace.title, path.basename(cwd), '新工作区标题应为目录名');
+    assert.notEqual(workspace.title, '[collab] T001 任务标题');
+
+    const second = await newSession(client, cwd, { runId: 'T002', title: '[collab] T002 另一个标题' });
+    assert.equal(second._meta.agentCollab.workspaceId, first._meta.agentCollab.workspaceId, '同一路径应复用工作区');
+    assert.equal(workspace.title, path.basename(cwd), '已有工作区不应被改名为会话标题');
+    await client.close();
+  } finally {
+    await stopBridge(box);
+  }
+});
+
 test('session/prompt：通知映射、seq/sub、截断、自己消息不回显、人发消息带 dsh-web-human', async () => {
   const box = await startBridge();
   try {

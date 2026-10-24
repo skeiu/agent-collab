@@ -668,7 +668,12 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       permissionPolicy: currentPolicy,
     });
     attachClientHandlers(client);
-    await client.initialize({ clientInfo: { name: 'agent-collab', version: packageManifest.version } });
+    try {
+      await client.initialize({ clientInfo: { name: 'agent-collab', version: packageManifest.version } });
+    } catch (error) {
+      await client.close().catch(() => {});
+      throw error;
+    }
     return client;
   }
 
@@ -676,78 +681,90 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
     await setOverlay(await buildAcpOverlay({ dshInfo: info, model: normalizeModel(options.model).model, env: process.env }));
     if (overlay.warning) warn(overlay.warning);
     const client = await spawnAcpClient(info);
-    const created = await client.newSession({ cwd: cwd ?? process.cwd(), mcpServers: [] });
-    const sessionId = created.sessionId;
-    const model = normalizeModel(options.model);
-    if (model.warning) warn(model.warning);
-    if (model.model) {
-      try {
-        await client.setConfigOption({ sessionId, configId: 'model', value: JSON.stringify([model.model.provider, model.model.model]) });
-      } catch (error) {
-        warn('acp 模式设置模型失败（' + error.message + '），使用覆盖层带来的默认模型');
-      }
-    }
-    const reasoning = mapReasoningEffort(options.reasoningEffort);
-    if (reasoning.warning) warn(reasoning.warning);
-    if (reasoning.value !== null) {
-      const configOptions = Array.isArray(created.configOptions) ? created.configOptions : [];
-      const hasReasoning = configOptions.some((option) => option && option.id === 'reasoning_effort');
-      if (!hasReasoning) {
-        warn('这个模型没有提供 reasoning_effort 选项，忽略思考强度 ' + reasoning.value + '（dsh 的档位有 low、medium、high、max；deepseek 服务商是 off、low、high、max）');
-      } else {
+    try {
+      const created = await client.newSession({ cwd: cwd ?? process.cwd(), mcpServers: [] });
+      const sessionId = created.sessionId;
+      const model = normalizeModel(options.model);
+      if (model.warning) warn(model.warning);
+      if (model.model) {
         try {
-          await client.setConfigOption({ sessionId, configId: 'reasoning_effort', value: reasoning.value });
+          await client.setConfigOption({ sessionId, configId: 'model', value: JSON.stringify([model.model.provider, model.model.model]) });
         } catch (error) {
-          warn('acp 模式设置思考强度失败（' + error.message + '），使用模型默认值');
+          warn('acp 模式设置模型失败（' + error.message + '），使用覆盖层带来的默认模型');
         }
       }
+      const reasoning = mapReasoningEffort(options.reasoningEffort);
+      if (reasoning.warning) warn(reasoning.warning);
+      if (reasoning.value !== null) {
+        const configOptions = Array.isArray(created.configOptions) ? created.configOptions : [];
+        const hasReasoning = configOptions.some((option) => option && option.id === 'reasoning_effort');
+        if (!hasReasoning) {
+          warn('这个模型没有提供 reasoning_effort 选项，忽略思考强度 ' + reasoning.value + '（dsh 的档位有 low、medium、high、max；deepseek 服务商是 off、low、high、max）');
+        } else {
+          try {
+            await client.setConfigOption({ sessionId, configId: 'reasoning_effort', value: reasoning.value });
+          } catch (error) {
+            warn('acp 模式设置思考强度失败（' + error.message + '），使用模型默认值');
+          }
+        }
+      }
+      const turn = makeTurn(client, sessionId, brief);
+      current = { client, transport: 'acp', sessionId };
+      transportChanged('acp');
+      return { sessionId, transport: 'acp', model: model.model ?? (overlay.entries.find((entry) => entry.id === 'acp')?.config ?? null), turn: turn.promise };
+    } catch (error) {
+      if (current && current.client === client) current = null;
+      await client.close().catch(() => {});
+      throw error;
     }
-    const turn = makeTurn(client, sessionId, brief);
-    current = { client, transport: 'acp', sessionId };
-    transportChanged('acp');
-    return { sessionId, transport: 'acp', model: model.model ?? (overlay.entries.find((entry) => entry.id === 'acp')?.config ?? null), turn: turn.promise };
   }
 
   async function startBridge(info, discovery, client, options, brief, runId, title) {
-    const envForSession = {};
-    for (const [key, value] of Object.entries(env ?? {})) {
-      if (isDsEnvKey(key)) envForSession[key] = String(value);
-      else warn('桥接模式只能注入 DSH_ 开头的环境变量，已丢弃：' + key);
-    }
-    envForSession.DSH_AGENT_COLLAB_ROLE = 'executor';
-    const model = normalizeModel(options.model);
-    if (model.warning) warn(model.warning);
-    const reasoning = mapReasoningEffort(options.reasoningEffort);
-    if (reasoning.warning) warn(reasoning.warning);
-    const agentPreset = options.agentPreset && options.agentPreset !== 'agent-collab' ? options.agentPreset : null;
-    const created = await client.newSession({
-      cwd: cwd ?? process.cwd(),
-      mcpServers: [],
-      _meta: {
-        agentCollab: {
-          runId,
-          title: normalizeTitle(runId, title),
-          agentPreset,
-          permissionPreset: options.permissionPreset ?? 'workspace-write',
-          model: model.model,
-          reasoningEffort: reasoning.value,
-          attachWorkspace: true,
-          env: envForSession,
+    try {
+      const envForSession = {};
+      for (const [key, value] of Object.entries(env ?? {})) {
+        if (isDsEnvKey(key)) envForSession[key] = String(value);
+        else warn('桥接模式只能注入 DSH_ 开头的环境变量，已丢弃：' + key);
+      }
+      envForSession.DSH_AGENT_COLLAB_ROLE = 'executor';
+      const model = normalizeModel(options.model);
+      if (model.warning) warn(model.warning);
+      const reasoning = mapReasoningEffort(options.reasoningEffort);
+      if (reasoning.warning) warn(reasoning.warning);
+      const agentPreset = options.agentPreset && options.agentPreset !== 'agent-collab' ? options.agentPreset : null;
+      const created = await client.newSession({
+        cwd: cwd ?? process.cwd(),
+        mcpServers: [],
+        _meta: {
+          agentCollab: {
+            runId,
+            title: normalizeTitle(runId, title),
+            agentPreset,
+            permissionPreset: options.permissionPreset ?? 'workspace-write',
+            model: model.model,
+            reasoningEffort: reasoning.value,
+            attachWorkspace: true,
+            env: envForSession,
+          },
         },
-      },
-    });
-    const sessionId = created.sessionId;
-    const turn = makeTurn(client, sessionId, brief);
-    current = { client, transport: 'bridge', sessionId };
-    transportChanged('bridge');
-    const meta = created._meta && created._meta.agentCollab ? created._meta.agentCollab : {};
-    return {
-      sessionId,
-      transport: 'bridge',
-      model: meta.model ?? model.model,
-      agentPreset: meta.agentPreset ?? null,
-      turn: turn.promise,
-    };
+      });
+      const sessionId = created.sessionId;
+      const turn = makeTurn(client, sessionId, brief);
+      current = { client, transport: 'bridge', sessionId };
+      transportChanged('bridge');
+      const meta = created._meta && created._meta.agentCollab ? created._meta.agentCollab : {};
+      return {
+        sessionId,
+        transport: 'bridge',
+        model: meta.model ?? model.model,
+        agentPreset: meta.agentPreset ?? null,
+        turn: turn.promise,
+      };
+    } catch (error) {
+      if (current && current.client === client) current = null;
+      await client.close().catch(() => {});
+      throw error;
+    }
   }
 
   return {

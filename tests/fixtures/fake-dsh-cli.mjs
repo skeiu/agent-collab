@@ -88,6 +88,7 @@ async function runWeb() {
   const turns = process.env.FAKE_DSH_TURNS ? JSON.parse(process.env.FAKE_DSH_TURNS) : null;
   const presets = process.env.FAKE_DSH_PRESETS ? JSON.parse(process.env.FAKE_DSH_PRESETS) : undefined;
   const defaultModel = process.env.FAKE_DSH_DEFAULT_MODEL ? JSON.parse(process.env.FAKE_DSH_DEFAULT_MODEL) : undefined;
+  const createError = process.env.FAKE_DSH_CREATE_ERROR ?? null;
   let context = null;
   let snapshotTimer = null;
   // 信号处理要在写出发现文件之前装好：父进程一看到发现文件就可能发 SIGTERM，没装处理函数时进程被直接结束，
@@ -103,7 +104,7 @@ async function runWeb() {
   process.once('exit', () => {
     try { fs.rmSync(discoveryFile, { force: true }); } catch { /* 忽略 */ }
   });
-  context = createFakeDsh({ homeDir: home, profile: 'web', turns, presets, defaultModel });
+  context = createFakeDsh({ homeDir: home, profile: 'web', turns, presets, defaultModel, createError });
   apply(context.ctx);
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline && !fs.existsSync(discoveryFile)) {

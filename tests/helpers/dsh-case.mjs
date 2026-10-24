@@ -110,6 +110,7 @@ export async function createDshCase(label, options = {}) {
           FAKE_DSH_TURNS: JSON.stringify(startOptions.turns ?? []),
           ...(startOptions.presets ? { FAKE_DSH_PRESETS: JSON.stringify(startOptions.presets) } : {}),
           ...(startOptions.defaultModel ? { FAKE_DSH_DEFAULT_MODEL: JSON.stringify(startOptions.defaultModel) } : {}),
+          ...(startOptions.createError ? { FAKE_DSH_CREATE_ERROR: String(startOptions.createError) } : {}),
           ...(startOptions.webMode ? { FAKE_DSH_WEB_MODE: startOptions.webMode } : {}),
         },
         stdio: ['ignore', 'pipe', 'pipe'],

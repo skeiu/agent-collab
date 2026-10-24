@@ -463,6 +463,7 @@ export class AcpBridgeServer {
       }
     }
     this.connections.clear();
+    for (const sessionId of this.sessions.keys()) this.dsh.clearSessionEnv(sessionId);
     this.sessions.clear();
     this.pendingModelControls.clear();
     if (this.server !== null) {
@@ -511,6 +512,7 @@ export class AcpBridgeServer {
   dropSession(sessionId) {
     this.sessions.delete(sessionId);
     this.pendingModelControls.delete(sessionId);
+    this.dsh.clearSessionEnv(sessionId);
   }
 
   async ensureAgentPresetInfo() {
@@ -627,7 +629,6 @@ export class AcpBridgeServer {
           setup: async (agentCtx, view) => {
             await this.dsh.mountAgentPreset(agentCtx, preset);
             modelControl.install(agentCtx);
-            view.registerEnv(agentCtx, env);
             await view.applyPermission(PERMISSION_PRESETS[permissionPreset]);
           },
         });
@@ -654,11 +655,12 @@ export class AcpBridgeServer {
     }
 
     const view = handle.view;
+    this.dsh.setSessionEnv(sessionId, env);
     await view.setTitle(meta.title);
     let workspaceId = null;
     if (meta.attachWorkspace !== false) {
       try {
-        workspaceId = await this.dsh.attachWorkspace(cwd, meta.title, sessionId);
+        workspaceId = await this.dsh.attachWorkspace(cwd, sessionId);
       } catch (error) {
         this.logger.warn('agent-collab bridge: attachWorkspace failed: ' + errorMessage(error));
       }
