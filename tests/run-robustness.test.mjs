@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   readJson,
@@ -34,7 +35,7 @@ test('注入一次 state.json 写入失败，任务仍正常走到终态', async
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
   assert.equal(start.code, 0, start.stdout);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
 
   const runDir = start.json.runDir;
   const events = (await fsp.readFile(path.join(runDir, 'events.jsonl'), 'utf8')).trim().split('\n').map((line) => JSON.parse(line));
@@ -73,7 +74,7 @@ test('运行目录是 0700、文件是 0600', { skip: process.platform === 'win3
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
   assert.equal(start.code, 0, start.stdout);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.json.status, 'done');
+  await assertTaskStatus(wait, 'done', ctx);
   const runDir = start.json.runDir;
   const dirMode = (await fsp.stat(runDir)).mode & 0o777;
   assert.equal(dirMode, 0o700, '运行目录权限是 ' + dirMode.toString(8));

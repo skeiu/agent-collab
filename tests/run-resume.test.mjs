@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   readJson,
@@ -43,17 +44,17 @@ test('correction 轮数到上限时 run resume 以 round_limit 拒绝', async (t
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(first.json.status, 'partial');
+  await assertTaskStatus(first, 'partial', ctx);
 
   const message1 = await writeMessage(ctx, 'correction-1', '第一处没做完\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message1], { executor });
   assert.equal(resumed.code, 0, resumed.stdout);
   assert.equal(resumed.json.turn, 2);
-  assert.equal(resumed.json.status, 'starting');
+  await assertTaskStatus(resumed, 'starting', ctx);
   assert.ok(resumed.json.workerPid > 0);
 
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(second.json.status, 'partial');
+  await assertTaskStatus(second, 'partial', ctx);
 
   const state = await readJson(path.join(runDir, 'state.json'));
   assert.equal(state.turn, 2);
@@ -81,13 +82,13 @@ test('answer 轮数单独计算，到上限时以 round_limit 拒绝', async (t)
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(first.json.status, 'blocked');
+  await assertTaskStatus(first, 'blocked', ctx);
 
   const answer = await writeMessage(ctx, 'answer-1', '用 3000 端口\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'answer', '--message', answer], { executor });
   assert.equal(resumed.code, 0, resumed.stdout);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(second.json.status, 'done');
+  await assertTaskStatus(second, 'done', ctx);
 
   const state = await readJson(path.join(runDir, 'state.json'));
   assert.deepEqual(state.counts, { correction: 0, answer: 1, resend: 0 });
@@ -111,7 +112,7 @@ test('resend 不占 correction 的上限', async (t) => {
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(first.json.status, 'partial');
+  await assertTaskStatus(first, 'partial', ctx);
   let state = await readJson(path.join(runDir, 'state.json'));
   assert.deepEqual(state.counts, { correction: 0, answer: 0, resend: 1 });
   assert.equal(state.turn, 2);
@@ -122,7 +123,7 @@ test('resend 不占 correction 的上限', async (t) => {
   assert.equal(resumed.code, 0, resumed.stdout);
   assert.equal(resumed.json.turn, 3);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(second.json.status, 'done');
+  await assertTaskStatus(second, 'done', ctx);
   state = await readJson(path.join(runDir, 'state.json'));
   assert.deepEqual(state.counts, { correction: 1, answer: 0, resend: 1 });
   assert.deepEqual(state.turnKinds, { 1: 'brief', 2: 'resend', 3: 'correction' });
@@ -159,7 +160,7 @@ test('stoppedBy 为 human 时记为 stopped_by_human，不自动重发汇报', a
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(first.json.status, 'stopped_by_human');
+  await assertTaskStatus(first, 'stopped_by_human', ctx);
   const state = await readJson(path.join(runDir, 'state.json'));
   assert.equal(state.turn, 1);
   assert.deepEqual(state.counts, { correction: 0, answer: 0, resend: 0 });
@@ -172,5 +173,5 @@ test('stoppedBy 为 human 时记为 stopped_by_human，不自动重发汇报', a
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message], { executor });
   assert.equal(resumed.code, 0, resumed.stdout);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
-  assert.equal(second.json.status, 'done');
+  await assertTaskStatus(second, 'done', ctx);
 });

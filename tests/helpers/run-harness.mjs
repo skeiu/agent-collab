@@ -1,5 +1,6 @@
 // 本文件：S3 测试的公共工具：临时仓库、临时 AGENT_COLLAB_HOME、假执行端进程和 CLI 调用。测试里统一从这里建环境，保证不碰真实的 ~/.agent-collab。
 
+import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
@@ -204,6 +205,85 @@ export async function runCli(ctx, argv, options = {}) {
     }
   }
   return { ...result, json: parsed, summary };
+}
+
+/** 从 CLI 输出里找运行目录：run start/resume 的 runDir、run wait 的 summaryFile、run status 的 run 对象。 */
+export function runDirFromResult(result, ctx) {
+  const json = result && result.json;
+  if (!json || typeof json !== 'object') return null;
+  if (typeof json.runDir === 'string') return json.runDir;
+  if (typeof json.summaryFile === 'string') return path.dirname(json.summaryFile);
+  if (json.run && typeof json.run.repoId === 'string' && json.run.runId !== undefined && ctx && ctx.home) {
+    return path.join(ctx.home, 'runs', json.run.repoId, String(json.run.runId));
+  }
+  return null;
+}
+
+/**
+ * 给定运行目录，返回一段诊断文字：state.json 的 status/statusReason、worker.log 最后约 40 行、
+ * events.jsonl 最后约 10 条事件的 type。测试断言失败时带上它，CI 日志里才能定位。
+ */
+export async function runDiagnostics(runDir) {
+  if (!runDir) return '诊断：找不到运行目录';
+  const lines = ['诊断（运行目录 ' + runDir + '）：'];
+  try {
+    const state = await readJson(path.join(runDir, 'state.json'));
+    lines.push('state.json: status=' + JSON.stringify(state.status ?? null) + ' statusReason=' + JSON.stringify(state.statusReason ?? null));
+  } catch (error) {
+    lines.push('state.json: 读不出来（' + error.message + '）');
+  }
+  try {
+    const rows = (await fsp.readFile(path.join(runDir, 'worker.log'), 'utf8')).split('\n');
+    if (rows.length > 0 && rows[rows.length - 1] === '') rows.pop();
+    const tail = rows.slice(-40);
+    lines.push('worker.log 最后 ' + tail.length + ' 行（共 ' + rows.length + ' 行）：');
+    lines.push(tail.join('\n'));
+  } catch (error) {
+    lines.push('worker.log: 读不出来（' + error.message + '）');
+  }
+  try {
+    const events = (await fsp.readFile(path.join(runDir, 'events.jsonl'), 'utf8'))
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+    const tail = events.slice(-10).map((event) => String(event.type));
+    lines.push('events.jsonl 最后 ' + tail.length + ' 条事件的 type（共 ' + events.length + ' 条）：' + tail.join(', '));
+  } catch (error) {
+    lines.push('events.jsonl: 读不出来（' + error.message + '）');
+  }
+  return lines.join('\n');
+}
+
+/** 任务状态断言失败时的完整信息：期望、实际、这次命令的 stdout/stderr 和运行目录诊断。 */
+export async function taskStatusFailureMessage(result, expectedText, actual, ctx, options = {}) {
+  const runDir = options.runDir ?? runDirFromResult(result, ctx);
+  return [
+    '任务状态不符：期望 ' + expectedText + '，实际 ' + JSON.stringify(actual),
+    '命令 stdout：\n' + String((result && result.stdout) || ''),
+    '命令 stderr：\n' + String((result && result.stderr) || ''),
+    await runDiagnostics(runDir),
+  ].join('\n');
+}
+
+/** 断言 CLI 返回的任务状态（json.status）；失败信息带诊断和这次命令的 stdout、stderr。 */
+export async function assertTaskStatus(result, expected, ctx, options = {}) {
+  const actual = options.value ?? (result && result.json ? result.json.status : undefined);
+  if (actual === expected) return actual;
+  assert.fail(await taskStatusFailureMessage(result, JSON.stringify(expected), actual, ctx, options));
+}
+
+/** 断言 CLI 返回的任务状态属于给定集合（例如“进行中”的几个状态）。 */
+export async function assertTaskStatusOneOf(result, allowed, ctx, options = {}) {
+  const actual = options.value ?? (result && result.json ? result.json.status : undefined);
+  if (allowed.includes(actual)) return actual;
+  assert.fail(await taskStatusFailureMessage(result, '属于 ' + JSON.stringify(allowed), actual, ctx, options));
 }
 
 export function parseJsonOutput(stdout) {

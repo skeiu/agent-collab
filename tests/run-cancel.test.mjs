@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   pathExists,
@@ -44,7 +45,7 @@ test('run cancel：状态变成 cancelled、锁已释放、之后不能 resume',
 
   const cancelled = await runCli(ctx, ['run', 'cancel', start.json.runId], { executor });
   assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
-  assert.equal(cancelled.json.status, 'cancelled');
+  await assertTaskStatus(cancelled, 'cancelled', ctx);
 
   const state = await readJson(statePath);
   assert.equal(state.status, 'cancelled');
@@ -83,7 +84,7 @@ test('工作进程不响应取消时，run cancel 按 PID 结束它并记为 can
 
   const cancelled = await runCli(ctx, ['run', 'cancel', start.json.runId], { executor, env });
   assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
-  assert.equal(cancelled.json.status, 'cancelled');
+  await assertTaskStatus(cancelled, 'cancelled', ctx);
 
   const state = await readJson(statePath);
   assert.equal(state.status, 'cancelled');
@@ -220,7 +221,7 @@ test('对 done 的任务 run cancel：直接记为 cancelled，之后不能 resu
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
   assert.equal(start.code, 0, start.stdout);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.json.status, 'done');
+  await assertTaskStatus(wait, 'done', ctx);
   await cancelSettledAndCheck(ctx, { executor, runDir: start.json.runDir, runId: start.json.runId, expectedStatus: 'done' });
 });
 
@@ -241,7 +242,7 @@ test('对 stalled 的任务 run cancel：直接记为 cancelled（RW9）', async
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
   assert.equal(start.code, 0, start.stdout);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
-  assert.equal(wait.json.status, 'stalled');
+  await assertTaskStatus(wait, 'stalled', ctx);
   await cancelSettledAndCheck(ctx, { executor, runDir: start.json.runDir, runId: start.json.runId, expectedStatus: 'stalled' });
 });
 
@@ -272,7 +273,7 @@ test('对 failed 的任务 run cancel：直接记为 cancelled（RW9）', async 
   process.kill(before.worker.pid, 'SIGKILL');
   await waitPidGone(before.worker.pid);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
-  assert.equal(wait.json.status, 'failed');
+  await assertTaskStatus(wait, 'failed', ctx);
   assert.equal(wait.json.statusReason, 'worker_lost');
   await cancelSettledAndCheck(ctx, { executor, runDir, runId: start.json.runId, expectedStatus: 'failed' });
 });

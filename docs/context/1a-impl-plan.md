@@ -131,3 +131,20 @@
   - RC2：副本里让 `run cancel` 处理停下的任务时经适配器发一条 `attach`，三个 RW9 用例 3 次都失败，失败信息带出那条命令；修复版 `run-cancel` 3 次 6/6。
   - RC3：20 个占满 CPU 的进程期间，`run-finalize`、`run-cancel` 各 8 份 × 2 轮全部通过，每轮 13–15 秒；按 PID 结束后无残留。RC4：`npm test` 3 次 146/146，每次 16–17 秒，无残留。
   - dsh 指出的局限：RC1 的判别力靠时序，新工作进程从启动到写终态（本机约 1.8 秒）要短于 2 秒的轮询间隔；机器慢到超过这个时长时，撤回版也可能通过（漏报，不会误报失败）。暂不处理。
+- 2026-10-24 经用户授权提交并推送 `1f346cb`。CI 运行 40087121759：5 组通过；Windows Node 20 有 2 个用例失败：
+  - `run-lock-atomic` 的读锁循环读到 `EPERM`。Windows 上文件已被删除、但还有别的进程开着它时就会这样。
+  - `run-lock` 的 `run resume` 用例第一轮记成了 `failed`。测试失败时不输出 `worker.log`，原因不明。
+- 2026-10-24 Windows 锁修复（[briefs/1a-s3-ci-winlock.md](briefs/1a-s3-ci-winlock.md)，依据 protocol.md §5.2“正在删除的文件”）由 Claude 在 dsh Web 派发并交付，验收通过：WL1–WL5 全部通过。【已验证】2026-10-24，Claude 重跑：
+  - 隔离：对照 `s3wl-baseline.txt`，只有 `core/rundir.mjs`、`core/run.mjs`、`core/worker.mjs`、`tests/helpers/run-harness.mjs` 和 10 个 `tests/run-*.test.mjs` 变了，另外新增了 `tests/run-lock-eperm.test.mjs`；文档、profiles 不变，`~/.agent-collab` 不存在，dsh Web 进程号未变。会话日志：从第一条记录起就是 `workspace-write`、审批 `ask`，没有审批请求，没有 git 操作，副本建在 `/tmp` 和仓库内的 `.tmp-probe/`，用完已删。
+  - 审阅：
+    - 实现：新增 `retryOnEperm`，只在 `win32` 上、只对 `EPERM` 重试，预算 1 秒。`readLock` 改为区分 missing、ok、unreadable 三种结果。读不出来的锁，`updateLock`、`releaseLock` 报 `lock_unreadable`；工作进程收尾时释放失败只记日志；`run wait` 按“还没释放”继续等。
+    - 测试：43 处状态断言改用 `assertTaskStatus`，判断条件没有放宽。有一处断言原来在失败信息里带 `reportError`，现在没有了，由诊断代替。
+  - WL1：新单元测试 9/9 通过。副本里让 `retryOnEperm` 不重试，4 个失败（“Windows 上应重试，实际调用 1 次”等）；把 `readLock` 改成读错就当不存在，4 个失败（“Missing expected rejection.”、按“刚写入”拒绝实际用了 15001 ms）。
+  - WL2：副本里给读锁循环注入一次 `EPERM`，Linux 上照旧失败（“读到了不完整的锁文件 … EPERM 注入”）。
+  - WL3：副本里让工作进程一启动就以 `failed`（`executor_error`）收尾并写一行标记，`run resume` 用例的失败信息里有 stdout、`statusReason="executor_error"` 和那行标记。
+  - WL4：20 个占满 CPU 的进程期间，`run-lock-atomic`、`run-lock` 各 8 份，再加一轮连同 `run-lock-eperm` 各 8 份，全部通过，每轮 17–18 秒，无残留。WL5：`npm test` 3 次 155/155，每次 16–17 秒，无残留。
+  - dsh 对第二个失败的分析：所有 `finalize('failed')` 都在 worker.mjs，锁相关代码只会抛 `lock_held` 和 `lock_unreadable`，判断与锁无关。下次 CI 失败时会有诊断输出。
+  - dsh 的两处取舍和遗留：
+    - `updateLock` 在锁文件不存在时不写、返回 `null`（工作进程可能已经收完尾并释放了锁）。Claude 认为合理，不改 protocol。
+    - `run cancel` 结束工作进程那条路径上的 `releaseLock` 没有捕获 `lock_unreadable`。只在 Windows 上 `EPERM` 持续超过 1 秒时才会碰到，留到下一轮。
+  - 回填：dev-setup.md 补了失败诊断的说明，【已验证】一行更新为 155/155。

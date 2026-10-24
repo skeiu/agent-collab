@@ -413,7 +413,13 @@ export async function runWorker({ runDir }) {
       log('测试：释放锁之前暂停 ' + beforeReleaseMs + ' 毫秒');
       await new Promise((resolve) => setTimeout(resolve, beforeReleaseMs));
     }
-    await releaseLock(lockFile, state.runId);
+    try {
+      await releaseLock(lockFile, state.runId);
+    } catch (error) {
+      // protocol.md 5.2：收尾时锁读不出来只记进 worker.log。终态已经写好，不改动，也不走外层的 finalize('failed')；
+      // 锁留给下一次获取时按旧锁处理。
+      log('释放仓库锁失败：' + (error && error.message ? error.message : String(error)) + '（终态已写入，不改变）');
+    }
     log('任务结束：' + status + (reason ? '（' + reason + '）' : ''));
     if (adapter) {
       try {

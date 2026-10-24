@@ -7,6 +7,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   readAttachments,
@@ -79,7 +80,7 @@ test('杀掉工作进程后 run wait 接上，events.jsonl 不跳号不重复且
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
 
   // 必须真的接上“进行中的一轮”：假执行端停在一轮中间等 attach，接上之后才继续。
   const attachments = await readAttachments(executor);
@@ -124,7 +125,7 @@ test('events.jsonl 最后一行不完整时也能恢复', async (t) => {
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
 
   const attachments = await readAttachments(executor);
   assert.ok(
@@ -164,7 +165,7 @@ test('接不上执行端会话时记为 failed（worker_lost）', async (t) => {
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'failed');
+  await assertTaskStatus(wait, 'failed', ctx);
   assert.equal(wait.json.statusReason, 'worker_lost');
   const summary = await readJson(path.join(runDir, 'summary.json'));
   assert.equal(summary.status, 'failed');
@@ -214,7 +215,7 @@ test('工作进程不在期间这一轮已跑完：attach 带回 result，按正
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'partial', ctx);
   // 这个用例测的是“接上时这一轮已经结束”，和上面几个用例的路径正好相反。
   const attachments = await readAttachments(executor);
   assert.equal(attachments.length, 1, JSON.stringify(attachments));
@@ -274,7 +275,7 @@ test('这一轮已跑完时接上：汇报只在 turn_end 的 finalText 里也�
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial', JSON.stringify(wait.json) + ' ' + JSON.stringify(wait.summary?.reportError ?? null));
+  await assertTaskStatus(wait, 'partial', ctx);
   const report = await readJson(path.join(runDir, 'report-1.json'));
   assert.equal(report.status, 'partial');
   const attachments = await readAttachments(executor);
@@ -293,7 +294,7 @@ test('attach 说这一轮已结束但不带 result 时仍记 failed（worker_los
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'failed');
+  await assertTaskStatus(wait, 'failed', ctx);
   assert.equal(wait.json.statusReason, 'worker_lost');
   const summary = await readJson(path.join(runDir, 'summary.json'));
   assert.equal(summary.status, 'failed');
@@ -338,7 +339,7 @@ test('sessionId 写进 state.json 之前杀掉工作进程：从 events.jsonl �
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
   assert.equal(await readStartCount(executor), 1, '同一个任务只能开一次执行端会话');
   const attachments = await readAttachments(executor);
   assert.ok(
@@ -371,7 +372,7 @@ test('sessionId 写进 state.json 之前杀掉工作进程且没有 session 事�
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'failed', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'failed', ctx);
   assert.equal(wait.json.statusReason, 'worker_lost');
   assert.equal(await readStartCount(executor), 1, '找不到 sessionId 时不能再开第二个会话');
   assert.equal(wait.summary.status, 'failed');
@@ -413,7 +414,7 @@ test('新工作进程在一次轮询间隔内就收尾：run wait 返回时 summ
     env: { ...ATTACH_ENV, AGENT_COLLAB_TEST_WAIT_POLL_MS: '1500', AGENT_COLLAB_TEST_SUMMARY_DELAY_MS: '2000' },
   });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'partial', ctx);
   // runCli 里统一断言 summary.json 可读；这里再核对内容。
   assert.equal(wait.summary.status, 'partial');
   assert.equal(wait.summary.report.status, 'partial');

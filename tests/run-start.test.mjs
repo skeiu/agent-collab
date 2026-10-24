@@ -6,6 +6,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
+  assertTaskStatusOneOf,
   createContext,
   makeReport,
   pidAlive,
@@ -41,7 +43,7 @@ test('run start 立即返回，工作进程独立存活，run wait 在任务停�
   const elapsed = Date.now() - startedAt;
   assert.equal(start.code, 0, start.stderr);
   assert.equal(start.json.ok, true);
-  assert.equal(start.json.status, 'starting');
+  await assertTaskStatus(start, 'starting', ctx);
   assert.match(start.json.runId, /^T\d{3,}$/);
   assert.ok(Number.isInteger(start.json.workerPid));
   // 假执行端第一轮要跑 2 秒，start 必须在这之前返回。
@@ -51,13 +53,13 @@ test('run start 立即返回，工作进程独立存活，run wait 在任务停�
   assert.ok(pidAlive(start.json.workerPid), '工作进程没有独立存活');
   const statusNow = await runCli(ctx, ['run', 'status', start.json.runId], { executor });
   assert.equal(statusNow.code, 0);
-  assert.ok(RUNNING.has(statusNow.json.run.status), '状态应为进行中，实际 ' + statusNow.json.run.status);
+  await assertTaskStatusOneOf(statusNow, [...RUNNING], ctx, { value: statusNow.json.run.status, runDir: start.json.runDir });
   assert.equal(statusNow.json.workerAlive, true);
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
   assert.equal(wait.code, 0, wait.stderr);
   assert.equal(wait.json.ok, true);
-  assert.equal(wait.json.status, 'done');
+  await assertTaskStatus(wait, 'done', ctx);
   assert.equal(wait.json.statusReason, null);
   for (const key of ['summaryFile', 'patchFile', 'reportFile']) {
     assert.ok(wait.json[key], key + ' 为空');
@@ -180,5 +182,5 @@ test('--designer 按 executorByDesigner 选执行端，并记下设计端', asyn
   assert.deepEqual(state.designer, { name: 'claude', model: 'model-x' });
   assert.equal(state.executor.name, 'fake');
   const wait = await runCli(ctx, ['run', 'wait', result.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.json.status, 'done');
+  await assertTaskStatus(wait, 'done', ctx);
 });

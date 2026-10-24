@@ -18,6 +18,16 @@ export class LockHeldError extends Error {
   }
 }
 
+/** 锁文件读不出来：改写或释放锁时不能当成“没有锁”。 */
+export class LockUnreadableError extends Error {
+  constructor(message, cause) {
+    super(message);
+    this.name = 'LockUnreadableError';
+    this.code = 'lock_unreadable';
+    if (cause) this.cause = cause;
+  }
+}
+
 /** 仓库标识：根目录名（非法字符换 _）加路径 SHA-256 前 8 位；Windows 先转小写再算哈希。 */
 export function repoIdFor(repoRoot, platform = process.platform) {
   const resolved = path.resolve(repoRoot);
@@ -124,14 +134,74 @@ export async function allocateRunDir(home, repoId) {
   }
 }
 
-/** 读仓库锁；文件不存在或内容不可用时返回 null。 */
-export async function readLock(file) {
+/** Windows 上“文件正在删除”造成的 EPERM 重试：总预算 1 秒（protocol.md 5.2）。 */
+const EPERM_RETRY_BUDGET_MS = 1000;
+const EPERM_RETRY_INITIAL_DELAY_MS = 5;
+const EPERM_RETRY_MAX_DELAY_MS = 50;
+const EPERM_RETRY_JITTER_MS = 5;
+
+function platformOf(options) {
+  return (options && options.platform) || process.platform;
+}
+
+/**
+ * 只对 Windows 上的 EPERM 重试：文件已被删除、但还有别的进程开着它时，打开、stat、link、
+ * 独占创建都会得到 EPERM，要等最后一个句柄关掉（protocol.md 5.2“正在删除的文件”）。
+ * 按总时长重试，默认预算 1 秒；超时仍失败时抛最后一次的原错误，并加上 attempts、elapsedMs。
+ * 其他平台、其他错误码不重试。platform、timeoutMs、initialDelayMs、maxDelayMs、jitterMs 可注入，便于测试。
+ */
+export async function retryOnEperm(operation, options = {}) {
+  const platform = platformOf(options);
+  const timeoutMs = options.timeoutMs ?? EPERM_RETRY_BUDGET_MS;
+  const initialDelayMs = options.initialDelayMs ?? EPERM_RETRY_INITIAL_DELAY_MS;
+  const maxDelayMs = options.maxDelayMs ?? EPERM_RETRY_MAX_DELAY_MS;
+  const jitterMs = options.jitterMs ?? EPERM_RETRY_JITTER_MS;
+  const startedAt = Date.now();
+  let attempts = 0;
+  for (;;) {
+    attempts += 1;
+    try {
+      return await operation();
+    } catch (error) {
+      if (platform !== 'win32' || !error || error.code !== 'EPERM') throw error;
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs >= timeoutMs) {
+        if (typeof error === 'object') {
+          error.attempts = attempts;
+          error.elapsedMs = elapsedMs;
+        }
+        throw error;
+      }
+      const exponential = initialDelayMs * 2 ** (attempts - 1);
+      const delay = Math.min(exponential, maxDelayMs);
+      const jitter = jitterMs > 0 ? Math.random() * jitterMs : 0;
+      const wait = Math.min(delay + jitter, timeoutMs - elapsedMs);
+      if (wait > 0) await sleep(wait);
+    }
+  }
+}
+
+/**
+ * 读锁：返回 { state: 'ok', lock, text } / { state: 'missing' } / { state: 'unreadable', error }。
+ * 只有 ENOENT 算“没有锁”；内容不是 JSON 对象、文件正在删除（Windows 上 EPERM 重试用完）
+ * 以及其他读取错误都算“读不出来”，由调用方决定怎么处理。
+ */
+export async function readLock(file, options = {}) {
+  let text;
   try {
-    const parsed = JSON.parse(await fsp.readFile(file, 'utf8'));
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    return parsed;
-  } catch {
-    return null;
+    text = await retryOnEperm(() => fsp.readFile(file, 'utf8'), options);
+  } catch (error) {
+    if (error && error.code === 'ENOENT') return { state: 'missing' };
+    return { state: 'unreadable', error };
+  }
+  try {
+    const value = JSON.parse(text);
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      return { state: 'unreadable', error: new Error('锁文件内容不是 JSON 对象'), text };
+    }
+    return { state: 'ok', lock: value, text };
+  } catch (error) {
+    return { state: 'unreadable', error, text };
   }
 }
 
@@ -144,31 +214,19 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 查看锁文件：missing / ok / unreadable；带原始文本，便于判断是否还是同一份内容。 */
-async function inspectLock(file) {
-  let text;
+/**
+ * 锁文件的修改时间距今多少毫秒；文件不存在时返回 null。
+ * Windows 上 EPERM 重试用完（文件正在删除）时按“刚写入”返回 0，不按不存在处理。
+ */
+async function lockAgeMs(file, options = {}) {
   try {
-    text = await fsp.readFile(file, 'utf8');
+    return await retryOnEperm(async () => {
+      const stat = await fsp.stat(file);
+      return Math.max(0, Date.now() - stat.mtimeMs);
+    }, options);
   } catch (error) {
-    if (error.code === 'ENOENT') return { state: 'missing', text: null };
-    return { state: 'unreadable', text: null };
-  }
-  try {
-    const value = JSON.parse(text);
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return { state: 'unreadable', text };
-    return { state: 'ok', lock: value, text };
-  } catch {
-    return { state: 'unreadable', text };
-  }
-}
-
-/** 锁文件的修改时间距今多少毫秒；文件不存在时返回 null。 */
-async function lockAgeMs(file) {
-  try {
-    const stat = await fsp.stat(file);
-    return Math.max(0, Date.now() - stat.mtimeMs);
-  } catch (error) {
-    if (error.code === 'ENOENT') return null;
+    if (error && error.code === 'ENOENT') return null;
+    if (error && error.code === 'EPERM' && platformOf(options) === 'win32') return 0;
     throw error;
   }
 }
@@ -186,17 +244,21 @@ async function writeLockTemp(dir, payload) {
   return tmp;
 }
 
+const LOCK_LINK_FALLBACK_CODES = new Set(['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV']);
+
 /**
  * 把临时文件链接成锁文件：link 是原子的，EEXIST 即“已被占用”，
  * 读的人不会看到空文件或写了一半的内容。文件系统不支持硬链接时退回独占复制。
+ * link 和独占复制上的 EPERM 按“文件正在删除”重试；重试用完仍是 EPERM 时抛给调用方按被占用处理。
  */
-async function linkLockFile(tmp, file) {
-  try {
-    await fsp.link(tmp, file);
-    return true;
-  } catch (error) {
-    if (error.code === 'EEXIST') return false;
-    if (['EPERM', 'EACCES', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'].includes(error.code)) {
+async function linkLockFile(tmp, file, options = {}) {
+  return retryOnEperm(async () => {
+    try {
+      await fsp.link(tmp, file);
+      return true;
+    } catch (error) {
+      if (error.code === 'EEXIST') return false;
+      if (!LOCK_LINK_FALLBACK_CODES.has(error.code)) throw error;
       try {
         await fsp.copyFile(tmp, file, fsConstants.COPYFILE_EXCL);
         return true;
@@ -205,8 +267,7 @@ async function linkLockFile(tmp, file) {
         throw copyError;
       }
     }
-    throw error;
-  }
+  }, options);
 }
 
 /** 锁目前的主人：锁里的 pid 活着就用它；否则看任务状态里的工作进程 pid（防 run start 退出、锁没来得及改写）。 */
@@ -227,39 +288,46 @@ async function lockStatus(home, repoId, runId) {
   return state && typeof state.status === 'string' ? state.status : null;
 }
 
-/** 抢“打破旧锁”的互斥文件；拿到返回路径，拿不到返回 null。 */
-async function acquireBreakGuard(file) {
+/**
+ * 抢“打破旧锁”的互斥文件；拿到返回路径，拿不到返回 null。
+ * Windows 上独占创建遇到 EPERM（文件正在删除）重试用完时按没拿到处理。
+ */
+async function acquireBreakGuard(file, options = {}) {
   const guard = file + '.break';
+  let handle;
   try {
-    const handle = await fsp.open(guard, 'wx', 0o600);
-    try {
-      await handle.writeFile(JSON.stringify({ v: 1, pid: process.pid, at: new Date().toISOString() }) + '\n');
-    } finally {
-      await handle.close();
-    }
-    return guard;
+    handle = await retryOnEperm(() => fsp.open(guard, 'wx', 0o600), options);
   } catch (error) {
-    if (error.code !== 'EEXIST') throw error;
-    const age = await lockAgeMs(guard);
-    if (age !== null && age > LOCK_UNREADABLE_GRACE_MS) await fsp.unlink(guard).catch(() => {});
-    return null;
+    if (error && error.code === 'EEXIST') {
+      const age = await lockAgeMs(guard, options);
+      if (age !== null && age > LOCK_UNREADABLE_GRACE_MS) await fsp.unlink(guard).catch(() => {});
+      return null;
+    }
+    if (error && error.code === 'EPERM' && platformOf(options) === 'win32') return null;
+    throw error;
   }
+  try {
+    await handle.writeFile(JSON.stringify({ v: 1, pid: process.pid, at: new Date().toISOString() }) + '\n');
+  } finally {
+    await handle.close();
+  }
+  return guard;
 }
 
 /**
  * 删除一个确认已死的旧锁。先拿互斥文件，再重读并确认它还是刚才那份、仍然没人持有：
  * 两个进程同时判定旧锁已死时，先建好新锁的那个不会被另一个删掉。
  */
-async function breakStaleLock(file, expectedText, isHeld) {
-  const guard = await acquireBreakGuard(file);
+async function breakStaleLock(file, expectedText, isHeld, options = {}) {
+  const guard = await acquireBreakGuard(file, options);
   if (!guard) return false;
   try {
-    const current = await inspectLock(file);
+    const current = await readLock(file, options);
     if (current.state === 'missing') return true;
     if (expectedText !== null && current.text !== expectedText) return false;
     if (current.state === 'ok' && (await isHeld(current.lock))) return false;
     if (current.state === 'unreadable') {
-      const age = await lockAgeMs(file);
+      const age = await lockAgeMs(file, options);
       if (age !== null && age < LOCK_UNREADABLE_GRACE_MS) return false;
     }
     try {
@@ -276,8 +344,9 @@ async function breakStaleLock(file, expectedText, isHeld) {
 /**
  * 拿仓库锁：先把完整内容写进临时文件，再 link 成 active.lock（EEXIST 即被占用）。
  * 锁里 pid 不存活时打破旧锁后重试；内容读不出来的锁在 5 秒宽限内按被占用处理。
+ * Windows 上 EPERM 重试用完（文件正在删除）时按被占用处理：LockHeldError，error.data 为 null。
  */
-export async function acquireLock({ home, repoId, runId, pid, phase = 'starting' }) {
+export async function acquireLock({ home, repoId, runId, pid, phase = 'starting', ...options }) {
   const file = lockFileFor(home, repoId);
   await ensurePrivateDir(path.dirname(file));
   const payload = {
@@ -293,11 +362,20 @@ export async function acquireLock({ home, repoId, runId, pid, phase = 'starting'
     const deadline = Date.now() + LOCK_RETRY_BUDGET_MS;
     for (;;) {
       if (Date.now() > deadline) throw new LockHeldError('仓库锁竞争失败：' + file, null);
-      if (await linkLockFile(tmp, file)) return file;
-      const observed = await inspectLock(file);
+      let created;
+      try {
+        created = await linkLockFile(tmp, file, options);
+      } catch (error) {
+        if (error && error.code === 'EPERM' && platformOf(options) === 'win32') {
+          throw new LockHeldError('仓库锁文件正在删除（EPERM），按被占用处理：' + file, null, { cause: error });
+        }
+        throw error;
+      }
+      if (created) return file;
+      const observed = await readLock(file, options);
       if (observed.state === 'missing') continue;
       if (observed.state === 'unreadable') {
-        const age = await lockAgeMs(file);
+        const age = await lockAgeMs(file, options);
         if (age !== null && age < LOCK_UNREADABLE_GRACE_MS) {
           throw new LockHeldError('仓库锁内容不可读（' + Math.round(age) + ' ms 前写入），按被占用处理', null);
         }
@@ -311,7 +389,7 @@ export async function acquireLock({ home, repoId, runId, pid, phase = 'starting'
           );
         }
       }
-      await breakStaleLock(file, observed.text, isHeld);
+      await breakStaleLock(file, observed.text ?? null, isHeld, options);
       await sleep(5 + Math.floor(Math.random() * 10));
     }
   } finally {
@@ -323,19 +401,34 @@ export async function acquireLock({ home, repoId, runId, pid, phase = 'starting'
   }
 }
 
-/** 改写锁的内容（run start 启动工作进程后改成工作进程的 pid）。 */
-export async function updateLock(file, patch) {
-  const existing = (await readLock(file)) ?? {};
-  const next = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+/**
+ * 改写锁的内容（run start 启动工作进程后改成工作进程的 pid）。
+ * 锁的内容读不出来（不可解析、Windows 上正在删除）时报错，不写出缺字段的锁。
+ * 文件已经不存在时什么都不写、返回 null：工作进程可能在 run start 改写之前就收完尾、释放了锁，
+ * 这时再补一份只有补丁字段的锁会留下错误的占用记录。
+ */
+export async function updateLock(file, patch, options = {}) {
+  const existing = await readLock(file, options);
+  if (existing.state === 'missing') return null;
+  if (existing.state !== 'ok') {
+    throw new LockUnreadableError('仓库锁读不出来，不改写：' + file, existing.error);
+  }
+  const next = { ...existing.lock, ...patch, updatedAt: new Date().toISOString() };
   await writeJson(file, next);
   return next;
 }
 
-/** 释放锁；只删除属于该任务的锁，避免误删别人的。 */
-export async function releaseLock(file, runId) {
-  const existing = await readLock(file);
-  if (!existing) return false;
-  if (runId && existing.runId && existing.runId !== runId) return false;
+/**
+ * 释放锁；只删除属于该任务的锁，避免误删别人的。
+ * 锁存在但读不出来时报错，不返回 false；文件不存在时返回 false。
+ */
+export async function releaseLock(file, runId, options = {}) {
+  const existing = await readLock(file, options);
+  if (existing.state === 'missing') return false;
+  if (existing.state === 'unreadable') {
+    throw new LockUnreadableError('仓库锁读不出来，未释放：' + file, existing.error);
+  }
+  if (runId && existing.lock.runId && existing.lock.runId !== runId) return false;
   try {
     await fsp.unlink(file);
     return true;

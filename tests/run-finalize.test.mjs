@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   pathExists,
@@ -65,7 +66,7 @@ test('读到终态时 summary.json 一定已经存在（不经过 run wait，每
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial');
+  await assertTaskStatus(wait, 'partial', ctx);
   assert.equal(wait.summary.status, 'partial');
 });
 
@@ -105,7 +106,7 @@ test('run wait 返回时它启动的工作进程都已退出、仓库锁已释�
   };
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'partial', ctx);
 
   // worker.log 里记过的每个工作进程 pid（被杀的、run wait 新启动的）都应已退出。
   const log = await fsp.readFile(path.join(runDir, 'worker.log'), 'utf8');
@@ -147,7 +148,7 @@ test('收尾开始后到达的执行端事件只记进 worker.log，不写 event
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'partial', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'partial', ctx);
 
   const events = await readEvents(runDir);
   assert.equal(

@@ -42,7 +42,7 @@ node --test --test-timeout=60000
 
 `AGENT_COLLAB_FAKE_EXECUTOR`（假执行端的 `host:port`）只由测试传给假适配器，运行时不读它。
 
-假执行端的脚本（JSON）除了按轮次列出步骤，还支持：步骤 `{ "kind": "wait_for_attach", "ms"? }`（停在这一轮里，直到这一轮收到过一次 `attach`，用来保证“接上时这一轮还在进行中”）；顶层开关 `afterTurnEnd: { triggerFile | ms, event, timeoutMs? }`（一轮结束后等触发文件出现或固定毫秒，再补发一条事件）和 `emitSessionOnStart`（`start` 期间自己发 `session` 事件）。一轮结束时，若脚本的 `end.finalText` 不能从这一轮的 text 事件按 [protocol.md](protocol.md) §3 的规则算出，假执行端会补一条 text 事件，使 `turn_end` 消息和补发的事件给出同一份最终文字。传了 `--record <文件>` 时，另外写 `<文件>.starts.jsonl`、`<文件>.attaches.jsonl`（每次 `attach` 时这一轮是否在跑）和 `<文件>.commands.jsonl`（收到的命令）。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。【已验证】2026-10-24，Linux、Node 22：`npm test` 连跑 10 次 146/146，跑完无残留进程。
+假执行端的脚本（JSON）除了按轮次列出步骤，还支持：步骤 `{ "kind": "wait_for_attach", "ms"? }`（停在这一轮里，直到这一轮收到过一次 `attach`，用来保证“接上时这一轮还在进行中”）；顶层开关 `afterTurnEnd: { triggerFile | ms, event, timeoutMs? }`（一轮结束后等触发文件出现或固定毫秒，再补发一条事件）和 `emitSessionOnStart`（`start` 期间自己发 `session` 事件）。一轮结束时，若脚本的 `end.finalText` 不能从这一轮的 text 事件按 [protocol.md](protocol.md) §3 的规则算出，假执行端会补一条 text 事件，使 `turn_end` 消息和补发的事件给出同一份最终文字。传了 `--record <文件>` 时，另外写 `<文件>.starts.jsonl`、`<文件>.attaches.jsonl`（每次 `attach` 时这一轮是否在跑）和 `<文件>.commands.jsonl`（收到的命令）。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。对 `run start`、`run wait`、`run status` 返回的任务状态，测试用 `tests/helpers/run-harness.mjs` 的 `assertTaskStatus` 断言。断言失败时会带上这次命令的 stdout、stderr 和运行目录的诊断：`status`、`statusReason`、`worker.log` 最后 40 行、最近 10 条事件的类型。这样 CI 失败时，直接看日志就能定位。【已验证】2026-10-24，Linux、Node 22：`npm test` 连跑 3 次 155/155，跑完无残留进程。
 
 ## 集成测试
 

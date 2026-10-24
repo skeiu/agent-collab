@@ -1,4 +1,4 @@
-// 本文件：仓库锁的原子性和多进程并发测试（RW2）：4 个进程同时抢锁，无锁和有 pid 已死的旧锁两种情况下每轮恰好一个成功；内容不可读的新锁在宽限内按被占用处理，锁文件出现时内容总是完整 JSON。
+// 本文件：仓库锁的原子性和多进程并发测试（RW2）：4 个进程同时抢锁，无锁和有 pid 已死的旧锁两种情况下每轮恰好一个成功；内容不可读的新锁在宽限内按被占用处理，锁文件出现时内容总是完整 JSON。Windows 上读锁遇到 EPERM 是“文件正在删除”，不算读到不完整的锁，但要计数并用 t.diagnostic 输出。
 
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
@@ -71,10 +71,13 @@ function startWorker(home, repoId) {
 }
 
 /** 每一轮让 4 个进程在同一时刻抢锁；返回每轮的结果。 */
-async function runRounds({ home, repoId, rounds, prepare }) {
+async function runRounds({ home, repoId, rounds, prepare, t }) {
   const file = lockFileFor(home, repoId);
   const workers = Array.from({ length: 4 }, () => startWorker(home, repoId));
   const badReads = [];
+  // Windows 上文件被删除、还有别的进程开着它时，再打开会得到 EPERM（“正在删除”），
+  // 等最后一个句柄关掉文件才消失。这和 ENOENT 一样只是“文件正在消失”，不算读到不完整的锁。
+  let disappearingReads = 0;
   try {
     for (let round = 1; round <= rounds; round += 1) {
       if (prepare) await prepare(round);
@@ -86,7 +89,13 @@ async function runRounds({ home, repoId, rounds, prepare }) {
             const text = await fsp.readFile(file, 'utf8');
             JSON.parse(text);
           } catch (error) {
-            if (error.code !== 'ENOENT') badReads.push('第 ' + round + ' 轮：' + error.message);
+            if (error.code === 'ENOENT') {
+              // 还没建好或已经删掉。
+            } else if (process.platform === 'win32' && error.code === 'EPERM') {
+              disappearingReads += 1;
+            } else {
+              badReads.push('第 ' + round + ' 轮：' + error.message);
+            }
           }
           await sleep(1);
         }
@@ -113,13 +122,14 @@ async function runRounds({ home, repoId, rounds, prepare }) {
   } finally {
     await Promise.all(workers.map((worker) => worker.close()));
   }
+  t.diagnostic('读取锁文件时遇到 EPERM（Windows 上正在删除的文件）' + disappearingReads + ' 次');
   assert.deepEqual(badReads, [], '读到了不完整的锁文件');
 }
 
 test('4 个进程同时抢锁：没有锁时每轮恰好一个成功，其余 lock_held（20 轮）', async (t) => {
   const home = await makeHome('free');
   t.after(() => fsp.rm(home, { recursive: true, force: true }));
-  await runRounds({ home, repoId: 'repo-a', rounds: 20 });
+  await runRounds({ home, repoId: 'repo-a', rounds: 20, t });
 });
 
 test('4 个进程同时抢 pid 已死的旧锁：每轮恰好一个成功，其余 lock_held（20 轮）', async (t) => {
@@ -131,6 +141,7 @@ test('4 个进程同时抢 pid 已死的旧锁：每轮恰好一个成功，其�
     home,
     repoId: 'repo-b',
     rounds: 20,
+    t,
     prepare: async () => {
       await fsp.writeFile(
         file,

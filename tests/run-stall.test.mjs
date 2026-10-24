@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   readAttachments,
@@ -36,6 +37,7 @@ async function startTask(ctx, script, env) {
   await executor.stop();
   return {
     wait: wait.json,
+    waitResult: wait,
     state: await readJson(path.join(start.json.runDir, 'state.json')),
     summary: await readJson(path.join(start.json.runDir, 'summary.json')),
   };
@@ -47,7 +49,7 @@ test('没有任何事件超过阈值时记为 stalled', async (t) => {
   const result = await startTask(ctx, {
     turns: [turnWithReport(makeReport(), { steps: [{ kind: 'sleep', ms: 4000 }] })],
   }, STALL_ENV);
-  assert.equal(result.wait.status, 'stalled');
+  await assertTaskStatus(result.waitResult, 'stalled', ctx);
   assert.equal(result.state.status, 'stalled');
   assert.match(result.state.statusReason, /空闲超时/);
   assert.equal(result.summary.turns[0].stopReason, 'cancelled', '卡死时应调用适配器的 cancel');
@@ -105,7 +107,7 @@ test('停下超过阈值之后再 resume：续接不记为 stalled（FX3）', as
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env: STALL_ENV });
   assert.equal(start.code, 0, start.stdout);
   const first = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: STALL_ENV });
-  assert.equal(first.json.status, 'blocked', JSON.stringify(first.json));
+  await assertTaskStatus(first, 'blocked', ctx);
 
   // 设计端审阅的时间超过卡死阈值，之后再续接：这段时间不该被算成执行端空闲。
   await new Promise((resolve) => setTimeout(resolve, 1200));
@@ -116,7 +118,7 @@ test('停下超过阈值之后再 resume：续接不记为 stalled（FX3）', as
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: STALL_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
   assert.equal(wait.json.statusReason, null);
   assert.equal(wait.summary.warnings.some((item) => item.includes('空闲超时')), false, JSON.stringify(wait.summary.warnings));
 });
@@ -159,7 +161,7 @@ test('attach 接上之后还要过一会儿才有事件：不记为 stalled（FX
   await new Promise((resolve) => setTimeout(resolve, 2500));
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_STALL_ENV });
   assert.equal(wait.code, 0, wait.stdout + wait.stderr);
-  assert.equal(wait.json.status, 'done', JSON.stringify(wait.json));
+  await assertTaskStatus(wait, 'done', ctx);
   assert.equal(wait.summary.warnings.some((item) => item.includes('空闲超时')), false, JSON.stringify(wait.summary.warnings));
   const attachments = await readAttachments(executor);
   assert.ok(

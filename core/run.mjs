@@ -300,7 +300,11 @@ async function cmdStart(argv, io, context) {
     io.out({ ok: true, runId, runDir, status: 'starting', workerPid: child.pid ?? null });
     return 0;
   } catch (error) {
-    await releaseLock(lockFile, runId);
+    try {
+      await releaseLock(lockFile, runId);
+    } catch (releaseError) {
+      io.err('仓库锁释放失败：' + (releaseError && releaseError.message ? releaseError.message : String(releaseError)));
+    }
     if (runDir) {
       try {
         await fsp.rm(runDir, { recursive: true, force: true });
@@ -352,12 +356,16 @@ async function cmdWait(argv, io, context) {
       // 不该因为“上一个任务的锁还在”被 lock_held 拒绝。
       const lockFile = lockFileFor(home, repoId);
       const lock = await readLock(lockFile);
-      if (lock && lock.runId === state.runId && Number.isInteger(lock.pid)) pids.add(lock.pid);
+      if (lock.state === 'ok' && lock.lock.runId === state.runId && Number.isInteger(lock.lock.pid)) {
+        pids.add(lock.lock.pid);
+      }
       for (const pid of pids) await waitForPidExit(pid, 3000);
       const lockDeadline = Date.now() + 3000;
       for (;;) {
         const current = await readLock(lockFile);
-        if (!current || current.runId !== state.runId || Date.now() >= lockDeadline) break;
+        // 读不出来（例如 Windows 上文件正在删除）按“还没释放”处理，仍受上面 3 秒上限约束。
+        const released = current.state === 'missing' || (current.state === 'ok' && current.lock.runId !== state.runId);
+        if (released || Date.now() >= lockDeadline) break;
         await sleep(25);
       }
       return finishWait(io, runDir, state);
@@ -507,7 +515,11 @@ async function cmdResume(argv, io, context) {
     io.out({ ok: true, runId, turn, status: 'starting', workerPid: child.pid ?? null });
     return 0;
   } catch (error) {
-    await releaseLock(lockFile, runId);
+    try {
+      await releaseLock(lockFile, runId);
+    } catch (releaseError) {
+      io.err('仓库锁释放失败：' + (releaseError && releaseError.message ? releaseError.message : String(releaseError)));
+    }
     throw error;
   }
 }
@@ -542,7 +554,7 @@ async function computeChangesFromBaseline(state, runDir) {
  * 对已经停下的任务取消（protocol.md 第 6 节 run cancel）：不结束任何进程，
  * state.json 和 summary.json 只改 status、statusReason、endedAt，其余字段保持不变。
  */
-async function cancelSettledRun({ home, repoId, runDir, runId, statePath, previousStatus, workerPid }) {
+async function cancelSettledRun({ home, repoId, runDir, runId, statePath, previousStatus, workerPid, io }) {
   await waitForPidExit(workerPid, 5000);
   const state = await readJson(statePath);
   if (!state) throw new CliError('找不到任务 ' + runId, { code: 'run_not_found', exitCode: 4 });
@@ -574,7 +586,16 @@ async function cancelSettledRun({ home, repoId, runDir, runId, statePath, previo
   await writeJson(summaryPath, summary);
   const lockFile = lockFileFor(home, repoId);
   const lock = await readLock(lockFile);
-  if (lock && lock.runId === runId) await releaseLock(lockFile, runId);
+  if (lock.state === 'ok' && lock.lock.runId === runId) {
+    try {
+      await releaseLock(lockFile, runId);
+    } catch (error) {
+      io.err('仓库锁释放失败：' + (error && error.message ? error.message : String(error)) + '（锁未释放，留给下一次获取时按旧锁处理）');
+    }
+  } else if (lock.state === 'unreadable') {
+    // protocol.md 5.2：读不出来的锁不能当成不存在，也不能猜归属去删，留给下一次获取时按旧锁处理。
+    io.err('仓库锁读不出来，未释放（留给下一次获取时按旧锁处理）：' + lockFile);
+  }
 }
 
 async function cmdCancel(argv, io, context) {
@@ -605,6 +626,7 @@ async function cmdCancel(argv, io, context) {
       statePath,
       previousStatus: state.status,
       workerPid: state.worker?.pid ?? null,
+      io,
     });
     io.out({ ok: true, runId, status: 'cancelled' });
     return 0;
@@ -634,6 +656,7 @@ async function cmdCancel(argv, io, context) {
         statePath,
         previousStatus: state.status,
         workerPid: state.worker?.pid ?? workerPid,
+        io,
       });
       io.out({ ok: true, runId, status: 'cancelled' });
       return 0;

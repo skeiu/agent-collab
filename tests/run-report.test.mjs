@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertTaskStatus,
   createContext,
   makeReport,
   readJson,
@@ -28,6 +29,7 @@ async function startTask(ctx, script, options = {}) {
     runId: start.json.runId,
     runDir,
     wait: wait.json,
+    waitResult: wait,
     state: await readJson(path.join(runDir, 'state.json')),
     summary: await readJson(path.join(runDir, 'summary.json')),
   };
@@ -39,7 +41,7 @@ test('汇报合法时任务状态取汇报的 status：done、partial、blocked'
   for (const [index, status] of ['done', 'partial', 'blocked'].entries()) {
     const result = await startTask(ctx, { turns: [turnWithReport(makeReport({ status }))] }, { name: 'status-' + index });
     assert.equal(result.state.status, status, '第 ' + index + ' 个：' + JSON.stringify(result.summary.reportError));
-    assert.equal(result.wait.status, status);
+    await assertTaskStatus(result.waitResult, status, ctx);
     assert.equal(result.summary.report.status, status);
     assert.equal(result.summary.reportError, null);
     assert.equal(result.summary.turns[0].report, 'valid');
@@ -87,7 +89,7 @@ test('重发后仍不合法时记为 report_invalid，report-<n>.json 带 error.
 
   assert.equal(result.state.status, 'report_invalid');
   assert.match(result.state.statusReason, /json|汇报|代码块/);
-  assert.equal(result.wait.status, 'report_invalid');
+  await assertTaskStatus(result.waitResult, 'report_invalid', ctx);
   assert.equal(result.summary.turns.length, 2);
   for (const file of ['report-1.json', 'report-2.json']) {
     const value = await readJson(path.join(result.runDir, file));
