@@ -190,3 +190,4 @@
   - 改法：适配器返回的“这一轮” Promise 创建时就挂一个空的拒绝处理（原 Promise 照样返回，之后 `await` 仍拿到 `dsh_disconnected`），`attach` 的那一轮也和断线的 guard 做 race；`resume`、`attach` 重新选连接前先关掉本适配器的上一条连接。与 protocol.md 一致。
   - 真实 Web 上重跑 T9 通过（见 [1a-acceptance.md](1a-acceptance.md)）。修复前的代码在这种情形下工作进程也不退出（旧连接一直开着；r2 的 T001 留下的工作进程 22 分钟后由 Claude 按 PID 结束）。
   - 留下的问题（[RISKS.md](RISKS.md) R13）：主动关旧连接时 worker.log 会记一条“dsh 连接断开：ACP client closed”，不影响结果但会误导排查；工作进程没有 `unhandledRejection`/`uncaughtException` 兜底，dsh 建议兜底后按 `failed` 收尾并在 protocol.md §5.5 写明；acp 模式的 `resume` 在 `resumeSession` 失败时没关新建的子进程（dsh 读代码发现，未验证）。
+  - 推送后 CI 运行 40119684014（`c7e50e2`）：Ubuntu、Windows 四组通过，“桥接断开”在所有平台都好了；macOS 两组各剩 1 项：桥接修复新加的“新工作区用目录名”用例拿没解析的临时路径找工作区（测试问题）。上一次（`965ca04`）Windows LTS 上出现过一次“run wait 返回时它启动的工作进程都已退出”失败，这次没有，记为观察（R11）。和 Web 重启后环境丢失、R13 里两项一起写成 [briefs/1a-fix4-env-resume.md](briefs/1a-fix4-env-resume.md)。
