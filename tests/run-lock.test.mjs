@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -32,10 +33,10 @@ test('同一仓库第二次 run start 以 lock_held 拒绝，error.data 带现�
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'a'), '--executor', 'fake'], { executor });
-  assert.equal(first.code, 0, first.stdout);
+  assertExit(first, 0);
 
   const second = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'b'), '--executor', 'fake'], { executor });
-  assert.equal(second.code, 3, second.stdout);
+  assertExit(second, 3);
   assert.equal(second.json.ok, false);
   assert.equal(second.json.error.code, 'lock_held');
   assert.equal(second.json.error.data.runId, first.json.runId);
@@ -48,7 +49,7 @@ test('同一仓库第二次 run start 以 lock_held 拒绝，error.data 带现�
   await assertTaskStatus(wait, 'done', ctx);
   // 任务停下后锁已释放，可以再派一个。
   const third = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'c'), '--executor', 'fake'], { executor });
-  assert.equal(third.code, 0, third.stdout);
+  assertExit(third, 0);
   await runCli(ctx, ['run', 'cancel', third.json.runId], { executor });
 });
 
@@ -82,13 +83,13 @@ test('锁里的 pid 不存活时能拿到锁', async (t) => {
 
   // 先跑一个任务拿到仓库标识和锁文件的位置，再伪造一个死进程的锁。
   const first = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'stale-1'), '--executor', 'fake'], { executor });
-  assert.equal(first.code, 0, first.stdout);
+  assertExit(first, 0);
   await runCli(ctx, ['run', 'wait', first.json.runId, '--timeout', '20'], { executor });
   const lockFile = path.join(path.dirname(first.json.runDir), 'active.lock');
   await fsp.writeFile(lockFile, JSON.stringify({ v: 1, runId: 'T999', pid: 2147483647, phase: 'worker', createdAt: new Date().toISOString() }) + '\n');
 
   const second = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'stale-2'), '--executor', 'fake'], { executor });
-  assert.equal(second.code, 0, second.stdout);
+  assertExit(second, 0);
   const lock = JSON.parse(await fsp.readFile(lockFile, 'utf8'));
   assert.equal(lock.runId, second.json.runId);
   assert.ok(lock.pid > 0);
@@ -117,13 +118,13 @@ test('本仓库别的任务在跑时 run resume 以 lock_held 拒绝', async (t)
   t.after(() => holder.stop());
 
   const first = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'held-1'), '--executor', 'fake'], { executor });
-  assert.equal(first.code, 0, first.stdout);
+  assertExit(first, 0);
   const firstWait = await runCli(ctx, ['run', 'wait', first.json.runId, '--timeout', '20'], { executor });
   await assertTaskStatus(firstWait, 'partial', ctx);
 
   // 另一个任务占着本仓库的锁。
   const second = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'held-2'), '--executor', 'fake'], { executor: holder });
-  assert.equal(second.code, 0, second.stdout);
+  assertExit(second, 0);
 
   // 前置条件：第二个任务确实在跑、工作进程活着、锁是它的。不满足时直接失败，而不是悄悄变成别的场景。
   const secondState = await waitFor(async () => {
@@ -137,13 +138,13 @@ test('本仓库别的任务在跑时 run resume 以 lock_held 拒绝', async (t)
   const messageFile = path.join(ctx.root, 'correction.md');
   await fsp.writeFile(messageFile, '接着改\n');
   const resumed = await runCli(ctx, ['run', 'resume', first.json.runId, '--kind', 'correction', '--message', messageFile], { executor });
-  assert.equal(resumed.code, 3, resumed.stdout);
+  assertExit(resumed, 3);
   assert.equal(resumed.json.error.code, 'lock_held');
   assert.equal(resumed.json.error.data.runId, second.json.runId);
 
   // 收掉第二个任务：它一直在跑，取消后应记为 cancelled。
   const cancelled = await runCli(ctx, ['run', 'cancel', second.json.runId], { executor: holder });
-  assert.equal(cancelled.code, 0, cancelled.stdout);
+  assertExit(cancelled, 0);
   await assertTaskStatus(cancelled, 'cancelled', ctx);
 });
 
@@ -160,14 +161,14 @@ test('run resume 重新拿锁，期间其他 run start 被锁住', async (t) => 
   t.after(() => executor.stop());
 
   const first = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'resume-1'), '--executor', 'fake'], { executor });
-  assert.equal(first.code, 0, first.stdout);
+  assertExit(first, 0);
   const firstWait = await runCli(ctx, ['run', 'wait', first.json.runId, '--timeout', '20'], { executor });
   await assertTaskStatus(firstWait, 'partial', ctx);
 
   const messageFile = path.join(ctx.root, 'correction.md');
   await fsp.writeFile(messageFile, '第 2 步没做完，请补上\n');
   const resumed = await runCli(ctx, ['run', 'resume', first.json.runId, '--kind', 'correction', '--message', messageFile], { executor });
-  assert.equal(resumed.code, 0, resumed.stdout);
+  assertExit(resumed, 0);
   assert.equal(resumed.json.turn, 2);
 
   const lockFile = path.join(path.dirname(first.json.runDir), 'active.lock');
@@ -176,7 +177,7 @@ test('run resume 重新拿锁，期间其他 run start 被锁住', async (t) => 
   assert.equal(lock.phase, 'worker');
 
   const blocked = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'resume-2'), '--executor', 'fake'], { executor });
-  assert.equal(blocked.code, 3);
+  assertExit(blocked, 3);
   assert.equal(blocked.json.error.code, 'lock_held');
 
   const secondWait = await runCli(ctx, ['run', 'wait', first.json.runId, '--timeout', '20'], { executor });

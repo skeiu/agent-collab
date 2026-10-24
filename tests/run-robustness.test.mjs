@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -33,7 +34,7 @@ test('注入一次 state.json 写入失败，任务仍正常走到终态', async
 
   const env = { AGENT_COLLAB_TEST_STATE_WRITE_FAIL_ONCE: '1' };
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
   await assertTaskStatus(wait, 'done', ctx);
 
@@ -55,9 +56,9 @@ test('run wait 带 --timeout 时超时返回 timedOut: true，退出码 0', asyn
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '0.4'], { executor });
-  assert.equal(wait.code, 0, wait.stdout);
+  assertExit(wait, 0);
   assert.equal(wait.json.ok, true);
   assert.equal(wait.json.timedOut, true);
   assert.equal(wait.json.runId, start.json.runId);
@@ -72,7 +73,7 @@ test('运行目录是 0700、文件是 0600', { skip: process.platform === 'win3
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
   await assertTaskStatus(wait, 'done', ctx);
   const runDir = start.json.runDir;

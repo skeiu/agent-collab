@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -21,7 +22,7 @@ async function startTask(ctx, script, extraArgs = []) {
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake', ...extraArgs], { executor });
-  assert.equal(start.code, 0, start.stdout + start.stderr);
+  assertExit(start, 0);
   return { executor, start, runId: start.json.runId, runDir: start.json.runDir };
 }
 
@@ -48,7 +49,7 @@ test('correction 轮数到上限时 run resume 以 round_limit 拒绝', async (t
 
   const message1 = await writeMessage(ctx, 'correction-1', '第一处没做完\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message1], { executor });
-  assert.equal(resumed.code, 0, resumed.stdout);
+  assertExit(resumed, 0);
   assert.equal(resumed.json.turn, 2);
   await assertTaskStatus(resumed, 'starting', ctx);
   assert.ok(resumed.json.workerPid > 0);
@@ -66,7 +67,7 @@ test('correction 轮数到上限时 run resume 以 round_limit 拒绝', async (t
 
   const message2 = await writeMessage(ctx, 'correction-2', '还有一处\n');
   const limited = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message2], { executor });
-  assert.equal(limited.code, 3, limited.stdout);
+  assertExit(limited, 3);
   assert.equal(limited.json.error.code, 'round_limit');
 });
 
@@ -86,7 +87,7 @@ test('answer 轮数单独计算，到上限时以 round_limit 拒绝', async (t)
 
   const answer = await writeMessage(ctx, 'answer-1', '用 3000 端口\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'answer', '--message', answer], { executor });
-  assert.equal(resumed.code, 0, resumed.stdout);
+  assertExit(resumed, 0);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
   await assertTaskStatus(second, 'done', ctx);
 
@@ -95,7 +96,7 @@ test('answer 轮数单独计算，到上限时以 round_limit 拒绝', async (t)
 
   const more = await writeMessage(ctx, 'answer-2', '再答一次\n');
   const limited = await runCli(ctx, ['run', 'resume', runId, '--kind', 'answer', '--message', more], { executor });
-  assert.equal(limited.code, 3);
+  assertExit(limited, 3);
   assert.equal(limited.json.error.code, 'round_limit');
 });
 
@@ -120,7 +121,7 @@ test('resend 不占 correction 的上限', async (t) => {
   // 上限是 1，但 resend 不算，所以这次 correction 应当被接受。
   const message = await writeMessage(ctx, 'correction', '把导出补上\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message], { executor });
-  assert.equal(resumed.code, 0, resumed.stdout);
+  assertExit(resumed, 0);
   assert.equal(resumed.json.turn, 3);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
   await assertTaskStatus(second, 'done', ctx);
@@ -143,7 +144,7 @@ test('进行中的任务 run resume 以 not_resumable 拒绝', async (t) => {
 
   const message = await writeMessage(ctx, 'correction', '改一下\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message], { executor });
-  assert.equal(resumed.code, 3, resumed.stdout);
+  assertExit(resumed, 3);
   assert.equal(resumed.json.error.code, 'not_resumable');
   await runCli(ctx, ['run', 'cancel', runId], { executor });
 });
@@ -171,7 +172,7 @@ test('stoppedBy 为 human 时记为 stopped_by_human，不自动重发汇报', a
   // 停下之后仍然可以续接。
   const message = await writeMessage(ctx, 'correction', '继续\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', message], { executor });
-  assert.equal(resumed.code, 0, resumed.stdout);
+  assertExit(resumed, 0);
   const second = await runCli(ctx, ['run', 'wait', runId, '--timeout', '20'], { executor });
   await assertTaskStatus(second, 'done', ctx);
 });

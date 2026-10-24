@@ -6,7 +6,10 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { repoIdFor } from '../core/rundir.mjs';
-import { createDshCase } from './helpers/dsh-case.mjs';
+import {
+  assertExit,
+  createDshCase,
+} from './helpers/dsh-case.mjs';
 
 async function writeConfig(caseApi, config) {
   await fsp.writeFile(path.join(caseApi.home, 'config.json'), JSON.stringify(config, null, 2));
@@ -42,7 +45,7 @@ test('一切正常：所有检查通过、退出码 0、doctor 不写文件', as
   const beforeDsh = await fileList(caseApi.dshHome);
   const beforeHome = await fileList(caseApi.home);
   const result = await caseApi.runCli(['doctor', '--json']);
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assertExit(result, 0);
   assert.equal(result.json.ok, true);
   assert.equal(check(result, 'dsh').ok, true);
   assert.equal(check(result, 'dsh_web').ok, true);
@@ -59,7 +62,7 @@ test('不是 git 仓库：repo 检查 error、顶层 ok false、退出码 1', as
   const caseApi = await createDshCase('doctor-not-git');
   t.after(() => caseApi.cleanup());
   const result = await caseApi.runCli(['doctor', '--json'], { cwd: caseApi.root });
-  assert.equal(result.code, 1);
+  assertExit(result, 1);
   assert.equal(result.json.ok, false);
   assert.equal(check(result, 'repo').ok, false);
   assert.equal(result.json.git.isRepo, false);
@@ -71,7 +74,7 @@ test('工作区有改动：worktree_clean 为 warn 且 ok false，顶层仍 ok',
   t.after(() => caseApi.cleanup());
   await fsp.writeFile(path.join(caseApi.repo, 'README.md'), '# changed\n');
   const result = await caseApi.runCli(['doctor', '--json']);
-  assert.equal(result.code, 0);
+  assertExit(result, 0);
   assert.equal(result.json.ok, true);
   assert.equal(check(result, 'worktree_clean').level, 'warn');
   assert.equal(check(result, 'worktree_clean').ok, false);
@@ -83,7 +86,7 @@ test('找不到 dsh：dsh 检查 error、顶层 ok false、退出码 1', async (
   t.after(() => caseApi.cleanup());
   await writeConfig(caseApi, { dsh: { home: null, profile: 'web', transport: 'auto' } });
   const result = await caseApi.runCli(['doctor', '--json'], { env: { PATH: '/usr/bin:/bin' } });
-  assert.equal(result.code, 1);
+  assertExit(result, 1);
   assert.equal(result.json.ok, false);
   assert.equal(check(result, 'dsh').ok, false);
   assert.equal(result.json.dsh.version, null);
@@ -94,7 +97,7 @@ test('桥接不在线：装了桥接时 webRunning 为 false；没装时为 null
   t.after(() => installed.cleanup());
   await installed.profile({ dependencies: { 'dsh-bridge': 'file:x' } });
   const installedResult = await installed.runCli(['doctor', '--json']);
-  assert.equal(installedResult.code, 0);
+  assertExit(installedResult, 0);
   assert.equal(check(installedResult, 'bridge').ok, false);
   assert.equal(installedResult.json.dsh.webRunning, false);
   assert.equal(installedResult.json.dsh.bridge.installed, true);
@@ -107,7 +110,7 @@ test('桥接不在线：装了桥接时 webRunning 为 false；没装时为 null
   assert.equal(missingResult.json.dsh.bridge.installed, false);
 
   const plain = await missing.runCli(['doctor']);
-  assert.equal(plain.code, 0, plain.stdout + plain.stderr);
+  assertExit(plain, 0);
   const lines = plain.stdout.trim().split('\n').filter(Boolean);
   assert.ok(lines.some((line) => line.startsWith('[INFO] dsh_web')), 'dsh_web 应为 INFO：' + plain.stdout);
   assert.ok(lines.some((line) => line.startsWith('[WARN] bridge')), 'bridge 应为 WARN：' + plain.stdout);
@@ -137,7 +140,7 @@ test('agent-collab 预设不可用：agent_preset 为 warn 且 ok false', async 
   await caseApi.profile({ dependencies: { 'dsh-bridge': 'file:x' } });
   await caseApi.startWeb({ presets: [{ id: 'standard', name: 'Standard' }] });
   const result = await caseApi.runCli(['doctor', '--json']);
-  assert.equal(result.code, 0);
+  assertExit(result, 0);
   assert.equal(check(result, 'agent_preset').level, 'warn');
   assert.equal(check(result, 'agent_preset').ok, false);
   assert.match(check(result, 'agent_preset').message, /不可用/);
@@ -163,7 +166,7 @@ test('transport 为 bridge 且桥接不在线：bridge 升为 error、顶层 ok 
   const caseApi = await createDshCase('doctor-bridge-required', { config: { dsh: { home: null, profile: 'web', transport: 'bridge', autoStartWeb: false } } });
   t.after(() => caseApi.cleanup());
   const result = await caseApi.runCli(['doctor', '--json']);
-  assert.equal(result.code, 1);
+  assertExit(result, 1);
   assert.equal(result.json.ok, false);
   assert.equal(check(result, 'bridge').level, 'error');
   assert.equal(check(result, 'bridge').ok, false);
@@ -173,10 +176,10 @@ test('--deep 以用法错误退出 2；不带 --json 时每项一行', async (t)
   const caseApi = await createDshCase('doctor-deep');
   t.after(() => caseApi.cleanup());
   const deep = await caseApi.runCli(['doctor', '--deep']);
-  assert.equal(deep.code, 2);
+  assertExit(deep, 2);
   assert.equal(deep.json.error.code, 'usage');
   const plain = await caseApi.runCli(['doctor']);
-  assert.equal(plain.code, 0);
+  assertExit(plain, 0);
   const lines = plain.stdout.trim().split('\n').filter(Boolean);
   assert.ok(lines.length >= 8, plain.stdout);
   assert.ok(lines.every((line) => line.startsWith('[')), plain.stdout);
@@ -186,7 +189,7 @@ test('--designer 输出 flow，executor 跟随全局 executorByDesigner', async 
   const caseApi = await createDshCase('doctor-flow');
   t.after(() => caseApi.cleanup());
   const first = await caseApi.runCli(['doctor', '--json', '--designer=claude']);
-  assert.equal(first.code, 0, first.stdout + first.stderr);
+  assertExit(first, 0);
   assert.deepEqual(first.json.flow, {
     designer: 'claude',
     executor: 'dsh',
@@ -198,7 +201,7 @@ test('--designer 输出 flow，executor 跟随全局 executorByDesigner', async 
 
   await writeConfig(caseApi, { ...caseApi.config, executorByDesigner: { claude: 'other' } });
   const changed = await caseApi.runCli(['doctor', '--json', '--designer', 'claude']);
-  assert.equal(changed.code, 0, changed.stdout + changed.stderr);
+  assertExit(changed, 0);
   assert.equal(changed.json.flow.executor, 'other');
 });
 
@@ -208,7 +211,7 @@ test('项目配置只能收紧：全局 always、项目 never 时 flow 仍为 al
   await writeConfig(caseApi, { ...caseApi.config, confirmBeforeDispatch: 'always' });
   await fsp.writeFile(path.join(caseApi.repo, '.agent-collab.json'), JSON.stringify({ confirmBeforeDispatch: 'never' }));
   const result = await caseApi.runCli(['doctor', '--json', '--designer', 'claude']);
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assertExit(result, 0);
   assert.equal(result.json.flow.confirmBeforeDispatch, 'always');
   assert.equal(check(result, 'config').level, 'warn');
 });
@@ -217,7 +220,7 @@ test('没有 --designer 时 flow 的 designer 和 executor 都是 null', async (
   const caseApi = await createDshCase('doctor-flow-null');
   t.after(() => caseApi.cleanup());
   const result = await caseApi.runCli(['doctor', '--json']);
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assertExit(result, 0);
   assert.equal(result.json.flow.designer, null);
   assert.equal(result.json.flow.executor, null);
 });
@@ -229,7 +232,7 @@ test('全局配置不是合法 JSON 时 flow 为 null、config 为 warn、顶层
   const result = await caseApi.runCli(['doctor', '--json'], {
     env: { PATH: caseApi.fake.binDir + path.delimiter + (process.env.PATH ?? '/usr/bin:/bin') },
   });
-  assert.equal(result.code, 0, result.stdout + result.stderr);
+  assertExit(result, 0);
   assert.equal(result.json.ok, true);
   assert.equal(result.json.flow, null);
   const configCheck = check(result, 'config');

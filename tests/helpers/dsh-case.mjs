@@ -8,6 +8,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { installFakeDsh } from './fake-dsh-install.mjs';
+import { killActiveWorkers, killChild, stopWebFromDiscovery } from './pids.mjs';
+
+export { assertExit } from './assert-exit.mjs';
 
 const exec = promisify(execFile);
 export const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -71,7 +74,6 @@ export async function createDshCase(label, options = {}) {
   };
   await fsp.writeFile(path.join(home, 'config.json'), JSON.stringify(config, null, 2));
   const webChildren = [];
-  const workerPids = [];
   const env = {
     ...process.env,
     AGENT_COLLAB_HOME: home,
@@ -91,7 +93,6 @@ export async function createDshCase(label, options = {}) {
     stateFile,
     config,
     env,
-    workerPids,
     async profile(packageJson) {
       const dir = path.join(dshHome, 'profiles', 'web');
       await fsp.mkdir(dir, { recursive: true });
@@ -132,19 +133,10 @@ export async function createDshCase(label, options = {}) {
       throw new Error('timed out waiting for fake dsh discovery file');
     },
     async stopWebs() {
-      const pids = new Set();
-      for (const child of webChildren.splice(0)) {
-        if (child.exitCode === null && child.pid) pids.add(child.pid);
-      }
-      try {
-        const recordValue = JSON.parse(await fsp.readFile(path.join(dshHome, 'agent-collab', 'bridge-web.json'), 'utf8'));
-        if (Number.isInteger(recordValue.pid) && recordValue.pid !== process.pid) pids.add(recordValue.pid);
-      } catch {
-        // 没有发现文件。
-      }
-      for (const pid of pids) {
-        try { process.kill(pid, 'SIGTERM'); } catch { /* 已退出 */ }
-      }
+      // 手里有句柄的：只结束还在运行的（句柄已退出时它的 PID 可能已经被别的进程复用）。
+      for (const child of webChildren.splice(0)) await killChild(child, { signal: 'SIGTERM' });
+      // 只有发现文件里的 PID 的（适配器自动启动的那个 Web）：发现文件还在、PID 存活时才结束。
+      await stopWebFromDiscovery(path.join(dshHome, 'agent-collab', 'bridge-web.json'));
       await new Promise((resolve) => setTimeout(resolve, 300));
     },
     async runCli(args, runOptions = {}) {
@@ -157,14 +149,14 @@ export async function createDshCase(label, options = {}) {
           maxBuffer: 20 * 1024 * 1024,
         });
       } catch (error) {
-        result = { code: error.code ?? 1, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
+        result = { code: error.code ?? 1, signal: error.signal ?? null, stdout: error.stdout ?? '', stderr: error.stderr ?? '' };
       }
       if (result.code === undefined) result = { ...result, code: 0 };
+      if (result.signal === undefined) result = { ...result, signal: null };
       let json = null;
       for (const line of String(result.stdout ?? '').trim().split('\n')) {
         try { json = JSON.parse(line); } catch { /* 继续 */ }
       }
-      if (json && Number.isInteger(json.workerPid)) workerPids.push(json.workerPid);
       return { ...result, json };
     },
     async startTask({ title = 'demo', brief = 'do it', extraArgs = [], env: extraEnv = {} } = {}) {
@@ -203,9 +195,8 @@ export async function createDshCase(label, options = {}) {
       return text.split('\n').filter(Boolean).map((line) => JSON.parse(line));
     },
     async cleanup() {
-      for (const pid of workerPids.splice(0)) {
-        try { process.kill(pid, 'SIGKILL'); } catch { /* 已退出 */ }
-      }
+      // 只结束仍在进行中的任务的工作进程；已经停下或结束的任务里，worker.pid 可能已经属于别的进程。
+      await killActiveWorkers(home);
       await caseApi.stopWebs();
       await fsp.rm(root, { recursive: true, force: true });
     },

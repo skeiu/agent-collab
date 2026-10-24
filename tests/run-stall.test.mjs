@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -32,7 +33,7 @@ async function startTask(ctx, script, env) {
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
   await executor.stop();
   return {
@@ -105,7 +106,7 @@ test('停下超过阈值之后再 resume：续接不记为 stalled（FX3）', as
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env: STALL_ENV });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const first = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: STALL_ENV });
   await assertTaskStatus(first, 'blocked', ctx);
 
@@ -114,10 +115,10 @@ test('停下超过阈值之后再 resume：续接不记为 stalled（FX3）', as
   const messagePath = path.join(ctx.root, 'answer.md');
   await fsp.writeFile(messagePath, '按问题单改\n');
   const resumed = await runCli(ctx, ['run', 'resume', start.json.runId, '--kind', 'answer', '--message', messagePath], { executor, env: STALL_ENV });
-  assert.equal(resumed.code, 0, resumed.stdout + resumed.stderr);
+  assertExit(resumed, 0);
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: STALL_ENV });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await assertTaskStatus(wait, 'done', ctx);
   assert.equal(wait.json.statusReason, null);
   assert.equal(wait.summary.warnings.some((item) => item.includes('空闲超时')), false, JSON.stringify(wait.summary.warnings));
@@ -150,7 +151,7 @@ test('attach 接上之后还要过一会儿才有事件：不记为 stalled（FX
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env: ATTACH_STALL_ENV });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const runDir = start.json.runDir;
   const before = await waitForSessionId(runDir);
   process.kill(before.worker.pid, 'SIGKILL');
@@ -160,7 +161,7 @@ test('attach 接上之后还要过一会儿才有事件：不记为 stalled（FX
   // 接上之后到下一个事件还有一段时间，没重置 lastActivityAt 的话这时就会被判卡死。
   await new Promise((resolve) => setTimeout(resolve, 2500));
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env: ATTACH_STALL_ENV });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await assertTaskStatus(wait, 'done', ctx);
   assert.equal(wait.summary.warnings.some((item) => item.includes('空闲超时')), false, JSON.stringify(wait.summary.warnings));
   const attachments = await readAttachments(executor);

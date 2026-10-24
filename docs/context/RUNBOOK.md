@@ -102,6 +102,17 @@ T=$(mktemp -d) && tar --exclude=.git -cf - . | tar -xf - -C "$T" && cd "$T" && g
 
 判断：测试全部通过，build 退出 0，`git status` 里只有复制过去的未跟踪文件（build 不产出文件）。【已验证】2026-10-23：Linux、Node 22，tmpfs 临时目录，3/3 通过。Node 20 和 Windows、macOS 靠 CI 验证。
 
+### 按 CI 的条件重跑测试（验收 dsh 交付时做）
+
+开发分区没有权限位（`core.fileMode=false`），所有文件都显示为可执行；本机 Node 22 还会让 ESM 语法的 `.js` 被 `require()` 加载。这两点会掩盖 CI（0644 检出、Node 20）上的失败（2026-10-25 S4 推送后 CI 六组全失败才发现）。验收时除了在仓库里跑 `npm test`，再在副本里跑两次：
+
+```bash
+T=$(mktemp -d) && git ls-files -co --exclude-standard -z | xargs -0 -I{} cp --parents {} "$T"/ && find "$T" -type f -exec chmod 644 {} + && cd "$T" && git init -q && npm test
+NODE_OPTIONS='--no-experimental-require-module --no-experimental-detect-module' npm test
+```
+
+判断：两次都全部通过。副本含工作区改动，不写本仓库的 `.git`。Windows 的行为（PID 复用、文件锁）这里测不出，仍靠 CI。【已验证】2026-10-25：在 `6639f3b` 上复现了 CI 的两类失败。
+
 ### 重跑第 1a 阶段的实验
 
 每个实验一条命令；为与 dsh 沙箱条件一致并多一层保护，用 bwrap 包一层（独立 PID 空间和 `/tmp`，其余只读）：

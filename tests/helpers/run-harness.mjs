@@ -7,6 +7,11 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { killChild, killWorkerIfActive, pidAlive } from './pids.mjs';
+
+export { assertExit } from './assert-exit.mjs';
+export { killChild, pidAlive } from './pids.mjs';
+
 const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 export const binPath = path.join(rootDir, 'bin', 'collab.mjs');
 export const fakeExecutorPath = path.join(rootDir, 'tests', 'fixtures', 'fake-executor.mjs');
@@ -26,8 +31,9 @@ export function run(command, args, options = {}) {
     child.stdout.on('data', (chunk) => stdout.push(chunk));
     child.stderr.on('data', (chunk) => stderr.push(chunk));
     child.on('error', reject);
-    child.on('close', (code) => resolve({
+    child.on('close', (code, signal) => resolve({
       code,
+      signal,
       stdout: Buffer.concat(stdout).toString('utf8'),
       stderr: Buffer.concat(stderr).toString('utf8'),
     }));
@@ -60,44 +66,14 @@ export async function createContext(label = 'case') {
     repo,
     home,
     executors: [],
-    workerPids: [],
     async cleanup() {
-      // 先结束工作进程，再结束假执行端，最后删临时目录。
-      for (const pid of ctx.workerPids.splice(0)) await killPid(pid);
+      // 先结束仍在进行中的任务的工作进程，再结束假执行端，最后删临时目录。
       await killLeftoverWorkers(home);
       await stopExecutors(ctx);
       await fsp.rm(root, { recursive: true, force: true });
     },
   };
   return ctx;
-}
-
-/** 结束一个自己 spawn 的子进程（SIGKILL）；已经退出时直接返回。 */
-export async function killChild(child) {
-  if (!child || child.exitCode !== null || child.signalCode !== null) return;
-  try {
-    process.kill(child.pid, 'SIGKILL');
-  } catch {
-    return;
-  }
-  await new Promise((resolve) => {
-    if (child.exitCode !== null || child.signalCode !== null) return resolve();
-    const timer = setTimeout(resolve, 1000);
-    child.once('exit', () => {
-      clearTimeout(timer);
-      resolve();
-    });
-  });
-}
-
-/** 按 PID 结束一个自己启动的进程（SIGKILL）；已经退出时忽略。 */
-async function killPid(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return;
-  try {
-    process.kill(pid, 'SIGKILL');
-  } catch {
-    // 进程已经退出。
-  }
 }
 
 /** 结束 ctx 上登记的所有假执行端。 */
@@ -193,8 +169,6 @@ export async function runCli(ctx, argv, options = {}) {
   if (options.executor) env.AGENT_COLLAB_FAKE_EXECUTOR = options.executor.address;
   const result = await run(process.execPath, [binPath, ...argv], { cwd: options.cwd ?? ctx.repo, env });
   const parsed = parseJsonOutput(result.stdout);
-  // run start / run resume 会返回工作进程 pid：登记下来，用例失败时 cleanup 也能按 PID 结束它。
-  if (parsed && Number.isInteger(parsed.workerPid)) ctx.workerPids.push(parsed.workerPid);
   // FX2：run wait 返回终态后，summary.json 必须已经可读。所有用例都走这里，统一断言。
   let summary = null;
   if (parsed && typeof parsed.summaryFile === 'string') {
@@ -354,8 +328,12 @@ export async function readEvents(runDir) {
   }
 }
 
-/** 结束本用例启动过的所有工作进程（按 state.json 里的 pid，只杀自己 spawn 的）。 */
-export async function killLeftoverWorkers(home) {
+/**
+ * 结束本用例启动过、而且按契约还应该活着的工作进程：读 state.json，只有任务仍在进行中（starting、running、
+ * waiting_approval、waiting_question）且 worker.pid 还活着时才结束。已经停下或结束的任务，工作进程会自己退出；
+ * 这时 PID 可能已被别的进程复用，不能再按 PID 结束。
+ */
+export async function killLeftoverWorkers(home, options = {}) {
   const runsDir = path.join(home, 'runs');
   let repos = [];
   try {
@@ -374,30 +352,8 @@ export async function killLeftoverWorkers(home) {
       if (!/^T\d+$/.test(runId)) continue;
       const stateFile = path.join(runsDir, repoId, runId, 'state.json');
       const state = await readJson(stateFile).catch(() => null);
-      const pid = state?.worker?.pid;
-      if (!Number.isInteger(pid)) continue;
-      try {
-        process.kill(pid, 0);
-      } catch {
-        continue;
-      }
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        // 已经退出。
-      }
+      killWorkerIfActive(state, options);
     }
-  }
-}
-
-/** 判断 PID 是否存活。 */
-export function pidAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    return error.code === 'EPERM';
   }
 }
 

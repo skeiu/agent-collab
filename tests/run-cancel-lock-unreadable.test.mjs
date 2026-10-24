@@ -6,13 +6,14 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   createContext,
   makeReport,
+  readJson,
   runCli,
   startFakeExecutor,
   turnWithReport,
   waitFor,
-  readJson,
 } from './helpers/run-harness.mjs';
 
 test('run cancel 按 PID 结束工作进程后，锁读不出来仍输出 ok true 并保留锁', async (t) => {
@@ -27,7 +28,7 @@ test('run cancel 按 PID 结束工作进程后，锁读不出来仍输出 ok tru
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const statePath = path.join(start.json.runDir, 'state.json');
   await waitFor(async () => {
     const state = await readJson(statePath).catch(() => null);
@@ -39,7 +40,7 @@ test('run cancel 按 PID 结束工作进程后，锁读不出来仍输出 ok tru
   await fsp.mkdir(lockFile);
 
   const cancelled = await runCli(ctx, ['run', 'cancel', start.json.runId], { executor, env });
-  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
+  assertExit(cancelled, 0);
   assert.equal(cancelled.json.ok, true, cancelled.stdout);
   assert.equal(cancelled.json.status, 'cancelled');
   assert.match(cancelled.stderr, /锁未释放/);

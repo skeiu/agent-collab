@@ -6,6 +6,8 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import { createDshCase, reportObject, reportText } from './helpers/dsh-case.mjs';
+import { pidAlive, stopWebFromDiscovery } from './helpers/pids.mjs';
+import { pathExists, waitFor, waitPidGone } from './helpers/run-harness.mjs';
 
 function acpScript(report = reportObject()) {
   return JSON.stringify({ updates: [reportText(report)] });
@@ -74,15 +76,15 @@ test('启动的 Web 提前退出：退回 acp，warning 写明原因和 pid', as
 test('等发现文件超时：退回 acp，warning 写明原因和 pid，进程不结束', async (t) => {
   const caseApi = await createDshCase('web-timeout', {
     config: { dsh: { home: null, profile: 'web', transport: 'auto', autoStartWeb: true, openBrowserOnStart: false, webArgs: ['--port', '0'] } },
-    env: { FAKE_ACP_SCRIPT: acpScript(), FAKE_DSH_WEB_MODE: 'no-discovery', AGENT_COLLAB_TEST_WEB_START_TIMEOUT_MS: '300' },
+    env: {
+      FAKE_ACP_SCRIPT: acpScript(),
+      FAKE_DSH_WEB_MODE: 'no-discovery',
+      AGENT_COLLAB_TEST_WEB_START_TIMEOUT_MS: '300',
+      // 这个 Web 活着但不会有发现文件，清理没法按发现文件结束它；让它过 3 秒自己退出，用例结束时不留进程。
+      FAKE_DSH_WEB_EXIT_AFTER_MS: '3000',
+    },
   });
-  const leftover = [];
-  t.after(async () => {
-    for (const pid of leftover) {
-      try { process.kill(pid, 'SIGTERM'); } catch { /* 已退出 */ }
-    }
-    await caseApi.cleanup();
-  });
+  t.after(() => caseApi.cleanup());
   await caseApi.profile({ dependencies: { 'dsh-bridge': 'file:x' } });
   const started = await caseApi.startTask();
   const wait = await caseApi.waitTask(started.runId);
@@ -92,7 +94,23 @@ test('等发现文件超时：退回 acp，warning 写明原因和 pid，进程�
   assert.ok(warning, '缺少超时的 warning');
   const matched = /Web pid (\d+)/.exec(warning);
   assert.ok(matched, 'warning 里没有 Web pid');
-  leftover.push(Number(matched[1]));
+  // 适配器不该结束它：此刻它一定还活着（假 Web 会按 FAKE_DSH_WEB_EXIT_AFTER_MS 自己退出）。
+  assert.equal(pidAlive(Number(matched[1])), true, '适配器等发现文件超时后不该结束自己启动的 Web');
+  // 等它自己退出：清理时临时目录里不能还有进程在写文件。
+  await waitPidGone(Number(matched[1]), 15000);
+});
+
+test('假 dsh Web 正常退出后发现文件被删除（“文件在”才说明它大概率还活着）', async (t) => {
+  const caseApi = await createDshCase('web-graceful-exit');
+  t.after(() => caseApi.cleanup());
+  await caseApi.startWeb({});
+  const file = path.join(caseApi.dshHome, 'agent-collab', 'bridge-web.json');
+  const record = JSON.parse(await fsp.readFile(file, 'utf8'));
+  assert.ok(Number.isInteger(record.pid), '发现文件里没有 pid');
+  // 发现文件还在、pid 存活：按清理规则应该结束它。
+  assert.equal(await stopWebFromDiscovery(file), true, '发现文件在、pid 存活时应该结束这个 Web');
+  await waitPidGone(record.pid);
+  await waitFor(async () => !(await pathExists(file)), { label: '假 dsh Web 退出后删掉发现文件' });
 });
 
 test('两个仓库同时派发、都需要自动启动：只启动一个 Web', async (t) => {

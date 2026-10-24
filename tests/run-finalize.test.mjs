@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -28,7 +29,7 @@ async function startTask(ctx, script, env, options = {}) {
   const briefPath = path.join(ctx.root, 'brief-' + (options.name ?? 'exec') + '.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout + start.stderr);
+  assertExit(start, 0);
   return { executor, start, runDir: start.json.runDir };
 }
 
@@ -65,7 +66,7 @@ test('读到终态时 summary.json 一定已经存在（不经过 run wait，每
   assert.equal(seen.summaryExists, true, '读到终态 ' + seen.status + ' 时 summary.json 还不存在');
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await assertTaskStatus(wait, 'partial', ctx);
   assert.equal(wait.summary.status, 'partial');
 });
@@ -105,7 +106,7 @@ test('run wait 返回时它启动的工作进程都已退出、仓库锁已释�
     AGENT_COLLAB_TEST_PAUSE_BEFORE_RELEASE_MS: '2500',
   };
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await assertTaskStatus(wait, 'partial', ctx);
 
   // worker.log 里记过的每个工作进程 pid（被杀的、run wait 新启动的）都应已退出。
@@ -147,7 +148,7 @@ test('收尾开始后到达的执行端事件只记进 worker.log，不写 event
   assert.equal(seen.summaryExists, true, '读到终态时 summary.json 还不存在');
 
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await assertTaskStatus(wait, 'partial', ctx);
 
   const events = await readEvents(runDir);

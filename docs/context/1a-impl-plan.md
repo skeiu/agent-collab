@@ -166,3 +166,8 @@
   - 插件实测（Claude Code 2.1.309，`claude -p --plugin-dir`，Haiku，临时 git 仓库，PATH 上没有 dsh）：`/agent-collab:collab` 在命令和 skill 列表里；skill 按预检第 1 步运行 `doctor --json --designer claude`，不经审批；同一插件的 `scripts/build.mjs --check` 被拒。花费约 0.01 美元。
   - 任务书没写死、dsh 自定的：文字输出最后一行 `[FLOW] flow：<JSON>`；项目配置有没生效的项时也出 `config` 检查项，`flow` 照常给出；`parseHost` 返回 `{ variables, slots }`。Claude 认为合理，已回填 protocol.md §6。
   - 回填：protocol.md §6，dev-setup.md（构建、`--check`、1a 手动安装步骤）。
+- 2026-10-25 CI 修复和 R11（[briefs/1a-ci-fix-s4.md](briefs/1a-ci-fix-s4.md)）由 Claude 按用户授权派发，dsh 交付，验收通过：PR0–PR4 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `cifix-baseline.txt`，产品代码和文档没变（RUNBOOK 是 Claude 自己改的），只改了 `tests/`；profiles 的哈希、用户 dsh Web 的进程号不变，`~/.agent-collab` 不存在。会话日志：`workspace-write`、审批 `ask`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
+  - 重跑：仓库里 `npm test` 3 次 224/224；`chmod 644` 的副本在默认参数和 Node 20 模拟参数下各 224/224（修复前同样方法 23 项失败），均无残留进程。反证：副本里去掉 `killWorkerIfActive` 的状态判断，“任务已经停下或结束时不结束它的 worker.pid”和 `killActiveWorkers` 两个用例失败。
+  - 实现：`tests/helpers/pids.mjs` 统一结束进程的规则，`assertExit` 替换了 101 处退出码断言；假 dsh 的 `lib/bin.js` 显式 0755，假 `js-yaml`、`yaml` 改为 CommonJS。dsh 另外发现并修了假 dsh Web 的一个缺陷：信号处理装在写发现文件之后，父进程一看到文件就发 SIGTERM 时会留下陈旧的发现文件；新增测试变量 `FAKE_DSH_WEB_EXIT_AFTER_MS`。Claude 接受这两处。
+  - 回填：dev-setup.md（测试变量、清理规则、224/224），RISKS.md R11，RUNBOOK“按 CI 的条件重跑测试”。

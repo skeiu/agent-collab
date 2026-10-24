@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   binPath,
   createContext,
   makeReport,
@@ -54,10 +55,10 @@ test('watch 按行格式打印里程碑事件，任务停下后退出', async (t
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
 
   const watched = await watchLines(ctx, [start.json.runId], {}, executor);
-  assert.equal(watched.code, 0, watched.stderr);
+  assertExit(watched, 0);
   assert.ok(watched.lines.length > 0, 'watch 没有任何输出');
   for (const line of watched.lines) {
     assert.match(line, /^\[T\d{3,} \d{2}:\d{2}:\d{2}\] .+$/, '行格式不对：' + line);
@@ -88,7 +89,7 @@ test('watch 按行格式打印里程碑事件，任务停下后退出', async (t
   // 任务已经停下，再 watch 一次会补打剩余的里程碑后立刻退出。
   const lastN = events[events.length - 1].n;
   const again = await watchLines(ctx, [start.json.runId, '--from', String(lastN)], {}, executor);
-  assert.equal(again.code, 0);
+  assertExit(again, 0);
   assert.equal(again.lines.length, 1, '从最后一个事件开始时只打印一行：' + again.lines.join('|'));
   assert.match(again.lines[0], /状态 running → done/);
 });
@@ -99,7 +100,7 @@ test('watch 找不到任务时退出码 4', async (t) => {
   const executor = await startFakeExecutor(ctx, { turns: [turnWithReport(makeReport())] });
   t.after(() => executor.stop());
   const watched = await watchLines(ctx, ['T999'], {}, executor);
-  assert.equal(watched.code, 4);
+  assertExit(watched, 4);
   const payload = JSON.parse(watched.lines[0]);
   assert.equal(payload.error.code, 'run_not_found');
 });

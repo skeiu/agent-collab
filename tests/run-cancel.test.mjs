@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   assertTaskStatus,
   createContext,
   makeReport,
@@ -25,7 +26,7 @@ async function startLongTask(ctx, script, env = {}) {
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const statePath = path.join(start.json.runDir, 'state.json');
   await waitFor(async () => {
     const state = await readJson(statePath).catch(() => null);
@@ -44,7 +45,7 @@ test('run cancel：状态变成 cancelled、锁已释放、之后不能 resume',
   const workerPid = (await readJson(statePath)).worker.pid;
 
   const cancelled = await runCli(ctx, ['run', 'cancel', start.json.runId], { executor });
-  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
+  assertExit(cancelled, 0);
   await assertTaskStatus(cancelled, 'cancelled', ctx);
 
   const state = await readJson(statePath);
@@ -63,7 +64,7 @@ test('run cancel：状态变成 cancelled、锁已释放、之后不能 resume',
   const messageFile = path.join(ctx.root, 'correction.md');
   await fsp.writeFile(messageFile, '继续做\n');
   const resumed = await runCli(ctx, ['run', 'resume', start.json.runId, '--kind', 'correction', '--message', messageFile], { executor });
-  assert.equal(resumed.code, 3, resumed.stdout);
+  assertExit(resumed, 3);
   assert.equal(resumed.json.error.code, 'not_resumable');
 });
 
@@ -83,7 +84,7 @@ test('工作进程不响应取消时，run cancel 按 PID 结束它并记为 can
   await waitFor(() => pathExists(path.join(ctx.repo, 'src', 'killed.js')), { label: '执行端写出文件' });
 
   const cancelled = await runCli(ctx, ['run', 'cancel', start.json.runId], { executor, env });
-  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
+  assertExit(cancelled, 0);
   await assertTaskStatus(cancelled, 'cancelled', ctx);
 
   const state = await readJson(statePath);
@@ -131,7 +132,7 @@ test('run cancel 等待期间任务自己以 done 结束：不结束进程，sum
   }, { label: '任务自己以 done 结束', timeout: 10000 });
 
   const cancelled = await cancelling;
-  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
+  assertExit(cancelled, 0);
   assert.deepEqual(cancelled.json, { ok: true, runId: start.json.runId, status: 'cancelled' });
 
   const state = await readJson(statePath);
@@ -169,7 +170,7 @@ async function cancelSettledAndCheck(ctx, { executor, runDir, runId, expectedSta
   const reportBefore = await fsp.readFile(path.join(runDir, 'report-1.json'), 'utf8').catch(() => null);
 
   const cancelled = await runCli(ctx, ['run', 'cancel', runId], { executor });
-  assert.equal(cancelled.code, 0, cancelled.stdout + cancelled.stderr);
+  assertExit(cancelled, 0);
   assert.deepEqual(cancelled.json, { ok: true, runId, status: 'cancelled' });
 
   const state = await readJson(path.join(runDir, 'state.json'));
@@ -203,11 +204,11 @@ async function cancelSettledAndCheck(ctx, { executor, runDir, runId, expectedSta
   const messageFile = path.join(ctx.root, 'resume-' + runId + '.md');
   await fsp.writeFile(messageFile, '继续做\n');
   const resumed = await runCli(ctx, ['run', 'resume', runId, '--kind', 'correction', '--message', messageFile], { executor });
-  assert.equal(resumed.code, 3, resumed.stdout);
+  assertExit(resumed, 3);
   assert.equal(resumed.json.error.code, 'not_resumable');
 
   const list = await runCli(ctx, ['run', 'status'], { executor });
-  assert.equal(list.code, 0);
+  assertExit(list, 0);
   assert.equal(list.json.runs.some((item) => item.runId === runId), false, '取消后 run status 不应再列出');
 }
 
@@ -219,7 +220,7 @@ test('对 done 的任务 run cancel：直接记为 cancelled，之后不能 resu
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
   await assertTaskStatus(wait, 'done', ctx);
   await cancelSettledAndCheck(ctx, { executor, runDir: start.json.runDir, runId: start.json.runId, expectedStatus: 'done' });
@@ -240,7 +241,7 @@ test('对 stalled 的任务 run cancel：直接记为 cancelled（RW9）', async
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor, env });
   await assertTaskStatus(wait, 'stalled', ctx);
   await cancelSettledAndCheck(ctx, { executor, runDir: start.json.runDir, runId: start.json.runId, expectedStatus: 'stalled' });
@@ -263,7 +264,7 @@ test('对 failed 的任务 run cancel：直接记为 cancelled（RW9）', async 
   const briefPath = path.join(ctx.root, 'brief.md');
   await fsp.writeFile(briefPath, '# 任务\n');
   const start = await runCli(ctx, ['run', 'start', '--brief', briefPath, '--executor', 'fake'], { executor, env });
-  assert.equal(start.code, 0, start.stdout);
+  assertExit(start, 0);
   const runDir = start.json.runDir;
   await waitFor(async () => {
     const value = await readJson(path.join(runDir, 'state.json')).catch(() => null);

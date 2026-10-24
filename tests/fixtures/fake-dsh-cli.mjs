@@ -84,12 +84,27 @@ async function runWeb() {
     process.stderr.write('fake dsh: DSH_HOME is not set\n');
     process.exit(2);
   }
+  const discoveryFile = path.join(home, 'agent-collab', 'bridge-web.json');
   const turns = process.env.FAKE_DSH_TURNS ? JSON.parse(process.env.FAKE_DSH_TURNS) : null;
   const presets = process.env.FAKE_DSH_PRESETS ? JSON.parse(process.env.FAKE_DSH_PRESETS) : undefined;
   const defaultModel = process.env.FAKE_DSH_DEFAULT_MODEL ? JSON.parse(process.env.FAKE_DSH_DEFAULT_MODEL) : undefined;
-  const context = createFakeDsh({ homeDir: home, profile: 'web', turns, presets, defaultModel });
+  let context = null;
+  let snapshotTimer = null;
+  // 信号处理要在写出发现文件之前装好：父进程一看到发现文件就可能发 SIGTERM，没装处理函数时进程被直接结束，
+  // 发现文件就留在磁盘上，清理时“文件在”不再说明 Web 还活着（后面就可能按 PID 结束别人的进程）。
+  const shutdown = () => {
+    if (snapshotTimer) clearInterval(snapshotTimer);
+    try { if (context) context.fake.dispose(); } catch { /* 忽略 */ }
+    try { fs.rmSync(discoveryFile, { force: true }); } catch { /* 忽略 */ }
+    process.exit(0);
+  };
+  process.once('SIGTERM', shutdown);
+  process.once('SIGINT', shutdown);
+  process.once('exit', () => {
+    try { fs.rmSync(discoveryFile, { force: true }); } catch { /* 忽略 */ }
+  });
+  context = createFakeDsh({ homeDir: home, profile: 'web', turns, presets, defaultModel });
   apply(context.ctx);
-  const discoveryFile = path.join(home, 'agent-collab', 'bridge-web.json');
   const deadline = Date.now() + 10000;
   while (Date.now() < deadline && !fs.existsSync(discoveryFile)) {
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -102,7 +117,6 @@ async function runWeb() {
     // 写一个假文件后删掉，模拟 Web 起来了但桥接没有写出发现文件。
     fs.rmSync(discoveryFile, { force: true });
   }
-  let snapshotTimer = null;
   if (stateFile) {
     const writeState = () => {
       try { fs.writeFileSync(stateFile, JSON.stringify(context.fake.snapshot(), null, 2)); } catch { /* 忽略 */ }
@@ -111,17 +125,9 @@ async function runWeb() {
     snapshotTimer = setInterval(writeState, 50);
     if (typeof snapshotTimer.unref === 'function') snapshotTimer.unref();
   }
-  const shutdown = () => {
-    if (snapshotTimer) clearInterval(snapshotTimer);
-    try { context.fake.dispose(); } catch { /* 忽略 */ }
-    try { fs.rmSync(discoveryFile, { force: true }); } catch { /* 忽略 */ }
-    process.exit(0);
-  };
-  process.once('SIGTERM', shutdown);
-  process.once('SIGINT', shutdown);
-  process.once('exit', () => {
-    try { fs.rmSync(discoveryFile, { force: true }); } catch { /* 忽略 */ }
-  });
+  // 有的用例需要“Web 活着但没有发现文件”（测试清理没法按发现文件结束它），用这个旋钮让它到点自己退出。
+  const exitAfter = Number(process.env.FAKE_DSH_WEB_EXIT_AFTER_MS);
+  if (Number.isFinite(exitAfter) && exitAfter > 0) setTimeout(shutdown, exitAfter);
   // 保持进程存活。
   setInterval(() => {}, 1000);
 }

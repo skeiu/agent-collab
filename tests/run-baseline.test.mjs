@@ -6,6 +6,7 @@ import path from 'node:path';
 import { test } from 'node:test';
 
 import {
+  assertExit,
   createContext,
   makeReport,
   readJson,
@@ -22,9 +23,9 @@ async function runTask(ctx, script, options = {}) {
   const argv = ['run', 'start', '--brief', briefPath, '--executor', 'fake'];
   for (const item of options.protected ?? []) argv.push('--protected', item);
   const start = await runCli(ctx, argv, { executor });
-  assert.equal(start.code, 0, start.stdout + start.stderr);
+  assertExit(start, 0);
   const wait = await runCli(ctx, ['run', 'wait', start.json.runId, '--timeout', '20'], { executor });
-  assert.equal(wait.code, 0, wait.stdout + wait.stderr);
+  assertExit(wait, 0);
   await executor.stop();
   const runDir = start.json.runDir;
   return {
