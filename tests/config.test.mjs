@@ -346,6 +346,13 @@ test('saveConfig 的写入是原子的：并发读取始终能看到完整 JSON'
       for (let index = 0; index < 30; index += 1) {
         await saveConfig(file, applyDefaults(configSchema, { protectedPaths: ['p' + index] }));
       }
+    } catch (error) {
+      const attempts = error && typeof error === 'object' ? error.attempts : undefined;
+      const elapsedMs = error && typeof error === 'object' ? error.elapsedMs : undefined;
+      assert.fail(
+        'saveConfig 失败：' + (error instanceof Error ? error.message : String(error)) +
+        '（code=' + (error && error.code) + '，attempts=' + attempts + '，elapsedMs=' + elapsedMs + '）',
+      );
     } finally {
       stop = true;
       await reader;

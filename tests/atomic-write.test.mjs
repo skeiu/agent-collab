@@ -61,7 +61,7 @@ for (const writer of writers) {
     }
   });
 
-  test(writer.name + '：Windows 上重试用尽时抛出原错误，临时文件不残留', async (t) => {
+  test(writer.name + '：Windows 上重试用尽时抛出原错误并带 attempts/elapsedMs，临时文件不残留', async (t) => {
     const root = await makeTemp();
     try {
       const file = path.join(root, 'config.json');
@@ -71,11 +71,17 @@ for (const writer of writers) {
         calls += 1;
         throw original;
       });
-      await assert.rejects(writer.write(file, 'content', { platform: 'win32' }), (error) => {
+      await assert.rejects(writer.write(file, 'content', { platform: 'win32', timeoutMs: 200, jitterMs: 0 }), (error) => {
         assert.equal(error, original);
+        assert.equal(typeof error.attempts, 'number');
+        assert.equal(error.attempts, calls);
+        assert.ok(error.attempts > 1, '应至少重试一次，实际 attempts=' + error.attempts);
+        assert.equal(typeof error.elapsedMs, 'number');
+        assert.ok(error.elapsedMs >= 200, 'elapsedMs 应达到注入的预算，实际 ' + error.elapsedMs);
+        assert.ok(error.elapsedMs < 1000, '短预算用例应在 1 秒内结束，实际 ' + error.elapsedMs);
         return true;
       });
-      assert.equal(calls, 10);
+      assert.ok(calls > 1, '应至少调用两次 rename');
       assert.deepEqual(await readdir(root), []);
     } finally {
       await rm(root, { recursive: true, force: true });

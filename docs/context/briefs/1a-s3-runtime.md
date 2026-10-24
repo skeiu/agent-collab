@@ -40,6 +40,7 @@ S1 的模块直接用：`core/config.mjs` 的 `loadConfig`、`getExecutorOptions
 - **`run status`**：没有任务号时列出本仓库未“结束”的任务，`--all` 列出所有仓库的。
 - **测试用的时间参数**：卡死阈值、取消检查间隔、`run cancel` 的 10 秒等，测试里需要缩短的，只能通过以 `AGENT_COLLAB_TEST_` 开头的环境变量覆盖，正式配置项不变。汇报里列出你加了哪些，由 Claude 写进 dev-setup.md。
 - 所有写文件的地方都按 protocol.md“通用约定”：原子写入（`events.jsonl` 是追加）、目录 0700、文件 0600。
+- Windows 上目标文件正被读取时，原子写入的改名可能在重试预算内仍然失败（2026-10-24 CI 实测，见 [1a-ci-windows-fix2.md](1a-ci-windows-fix2.md)）。工作进程更新 `state.json` 失败时不退出：在 `events.jsonl` 记一条 `warning`，下次更新时再写；只有终态那一次写入失败才按错误处理。加一个用例：注入一次写入失败，任务仍正常走到终态。
 
 ## 验收标准
 

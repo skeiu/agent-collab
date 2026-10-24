@@ -27,7 +27,7 @@
 
 ## 阻塞与待核实
 
-- 2026-10-23 经用户授权推送 S1、S2（`176eb90`）。CI 在 Linux、macOS 通过；Windows 卡在 `tests/config.test.mjs`（`saveConfig` 改名抛 `EPERM` 后测试挂住），运行已由用户中断。修复（[briefs/1a-ci-windows-fix.md](briefs/1a-ci-windows-fix.md)）2026-10-24 验收通过【已验证】2026-10-24（见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），同日经用户授权提交并推送；Windows 是否修好以推送后的 CI 为准【待核实】。
+- 2026-10-23 经用户授权推送 S1、S2（`176eb90`）。CI 在 Linux、macOS 通过；Windows 卡在 `tests/config.test.mjs`（`saveConfig` 改名抛 `EPERM` 后测试挂住），运行已由用户中断。修复（[briefs/1a-ci-windows-fix.md](briefs/1a-ci-windows-fix.md)）2026-10-24 验收通过【已验证】2026-10-24（见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），同日经用户授权提交并推送（`2719951`）。CI 运行 40055863970：Linux、macOS 4 组通过；Windows 两组不再挂住，8 秒跑完，88 个用例只剩并发读写那个失败：改名重试约 1.1 秒用尽仍是 `EPERM`。第 2 轮修复（[briefs/1a-ci-windows-fix2.md](briefs/1a-ci-windows-fix2.md)，重试预算加到 10 秒）2026-10-24 验收通过【已验证】2026-10-24，同日经用户授权提交并推送，Windows 上是否修好待 CI；S3 任务书同步加了“`state.json` 写入失败不退出”。
 
 - 【待核实】`package.json` 写了 `"license": "MIT"`，但 LICENSE 文件还没建；版权人署名需用户提供（PLAN.md §7.1、§18）。
 - 【待核实】PLAN.md §3 中 D1–D19 的确认人（见 [DECISIONS.md](DECISIONS.md)）。
