@@ -407,6 +407,13 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
     });
   }
 
+  // 适配器返回的 turn 可能过一会儿才被工作进程等待；拒绝先挂一个空的处理函数，
+  // 避免 Node 把它当成未处理的拒绝结束工作进程，同时保留原 Promise 的拒绝原因给之后 await 的人。
+  function handledTurnPromise(promise) {
+    promise.catch(() => {});
+    return promise;
+  }
+
   function createTurn() {
     let reject = null;
     const guard = new Promise((resolve, rejectPromise) => {
@@ -427,6 +434,14 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
     };
   }
 
+  // 续接（resume/attach）要重新选连接；先关掉本适配器上一条连接，避免两条连接同时订阅同一会话。
+  async function closeCurrentConnection() {
+    if (!current || !current.client) return;
+    const previous = current.client;
+    current = null;
+    await previous.close().catch(() => {});
+  }
+
   function makeTurn(client, sessionId, promptText) {
     const turn = createTurn();
     currentTurn = turn;
@@ -445,15 +460,16 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       if (currentTurn === turn) currentTurn = null;
       throw error;
     });
-    return { promise: Promise.race([promptPromise, turn.guard]), reject: turn.reject };
+    return { promise: handledTurnPromise(Promise.race([promptPromise, turn.guard])), reject: turn.reject };
   }
 
   function makeAttachTurn() {
     const turn = createTurn();
     currentTurn = turn;
-    turn.promise = new Promise((resolve) => {
+    const settled = new Promise((resolve) => {
       turn.resolveTurn = () => resolve(buildResult(turn));
     });
+    turn.promise = handledTurnPromise(Promise.race([settled, turn.guard]));
     return turn;
   }
 
@@ -804,6 +820,9 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
 
     async resume({ sessionId, message }) {
       if (closed) throw new Error('适配器已经关闭');
+      // start 时的连接还订阅着同一会话；不先关掉，新旧两条连接会把同一批
+      // session/update 都投给这一轮，finalText 出现重复。
+      await closeCurrentConnection();
       const choice = await chooseTransport();
       if (choice.mode === 'bridge') {
         const client = choice.client;
@@ -830,6 +849,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
 
     async attach({ sessionId, sinceCursor }) {
       if (closed) throw new Error('适配器已经关闭');
+      await closeCurrentConnection();
       const choice = await chooseTransport();
       if (choice.mode === 'acp') return { attached: false };
       const client = choice.client;

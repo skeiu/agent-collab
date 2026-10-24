@@ -184,3 +184,9 @@
   - 改法：shell 环境的提供者按变量名注册在桥接根上下文，`resolve` 按 `execution.agent.id` 查“会话 → 变量”表，`session/close`、桥接停止、`agent/disposed` 时删；新工作区调用 `workspaceRegistry.create(cwd)` 不传标题，由 dsh 取目录名（dsh 源码 `defaultWorkspaceTitle`）；`startBridge`、`startAcp` 失败时关闭自己建的连接和子进程。假 dsh 的 `shellEnv` 改为和真 dsh 一样检查键的归属。
   - BM5：版本号没提升（仍 `0.0.0`），protocol.md 不用改。dsh 建议统一升到 `0.0.1` 以便从发现文件区分新旧桥接，留给用户决定。
   - 留下的问题：续接时桥接不重新登记环境（`session/resume` 不带 `env`）。同一个 Web 进程里会话没被卸载时环境还在；Web 重启或 agent 卸载后再续接，执行端 shell 里没有 `DSH_AGENT_COLLAB_ROLE`（旧实现也一样）。重启 Web 后用续接实测。
+- 2026-10-25 第三轮修复（[briefs/1a-ci-fix3-unhandled-turn.md](briefs/1a-ci-fix3-unhandled-turn.md)：CI 剩下的 `worker_lost`；S6 发现的重发时汇报重复）由 Claude 按用户授权派发，dsh 交付，验收通过：FX1–FX4 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `fx3-baseline.txt`，profiles 哈希、用户 dsh Web 进程号不变；会话日志 `workspace-write`，没有审批请求，没有按名字结束进程、读写 `~/.dsh`（命中的只有测试里临时 `DSH_HOME` 下的发现文件）或 git 写操作。
+  - 重跑：`npm test` 7 次，6 次 236/236；另 1 次 235/236 是 Claude 做反证时临时撤回了 `core/adapters/dsh.mjs`、正好和后台那次测试重叠，不算偶发失败。`chmod 644` 副本默认参数、Node 20 模拟参数各 236/236；`adapter-dsh.mjs` `RESULT: 通过`。反证：撤回 `core/adapters/dsh.mjs` 的修改，新加的 4 个用例全部失败。
+  - 改法：适配器返回的“这一轮” Promise 创建时就挂一个空的拒绝处理（原 Promise 照样返回，之后 `await` 仍拿到 `dsh_disconnected`），`attach` 的那一轮也和断线的 guard 做 race；`resume`、`attach` 重新选连接前先关掉本适配器的上一条连接。与 protocol.md 一致。
+  - 真实 Web 上重跑 T9 通过（见 [1a-acceptance.md](1a-acceptance.md)）。修复前的代码在这种情形下工作进程也不退出（旧连接一直开着；r2 的 T001 留下的工作进程 22 分钟后由 Claude 按 PID 结束）。
+  - 留下的问题（[RISKS.md](RISKS.md) R13）：主动关旧连接时 worker.log 会记一条“dsh 连接断开：ACP client closed”，不影响结果但会误导排查；工作进程没有 `unhandledRejection`/`uncaughtException` 兜底，dsh 建议兜底后按 `failed` 收尾并在 protocol.md §5.5 写明；acp 模式的 `resume` 在 `resumeSession` 失败时没关新建的子进程（dsh 读代码发现，未验证）。

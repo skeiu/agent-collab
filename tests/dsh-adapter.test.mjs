@@ -198,6 +198,68 @@ test('桥接断开：进行中的一轮以 failed 结束，statusReason 说明�
   assert.match(log, /dsh 连接断开/);
 });
 
+async function startDisconnectBridge(caseApi, resumeMeta = {}) {
+  const sockets = new Set();
+  const server = net.createServer((socket) => {
+    sockets.add(socket);
+    socket.on('close', () => sockets.delete(socket));
+    socket.setNoDelay(true);
+    const peer = new JsonRpcPeer({ readable: socket, writable: socket, name: 'fake-bridge-disconnect-after-response' });
+    peer.onRequest('initialize', () => ({ protocolVersion: 1, agentInfo: { name: 'x', version: '0' }, agentCapabilities: { promptCapabilities: { image: false } } }));
+    peer.onRequest('session/new', () => ({ sessionId: 'session-1', configOptions: [] }));
+    peer.onRequest('session/resume', () => ({ configOptions: [], _meta: { agentCollab: resumeMeta } }));
+    peer.onRequest('session/prompt', () => new Promise(() => {}));
+  });
+  const port = await new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
+  const file = path.join(caseApi.dshHome, 'agent-collab', 'bridge-web.json');
+  await fsp.mkdir(path.dirname(file), { recursive: true });
+  await fsp.writeFile(file, JSON.stringify({
+    v: 1, host: '127.0.0.1', port, token: 't', pid: process.pid, protocol: 1, protocolMin: 1,
+    bridgeVersion: '0.0.0', dshVersion: '0.2.1', profile: 'web', startedAt: new Date().toISOString(),
+  }));
+  return {
+    disconnect() {
+      for (const socket of sockets) socket.destroy();
+    },
+    async close() {
+      for (const socket of sockets) socket.destroy();
+      await new Promise((resolve) => server.close(resolve));
+    },
+  };
+}
+
+function disconnectAdapter(caseApi) {
+  const config = { dsh: { home: caseApi.dshHome, profile: 'web', transport: 'bridge', autoStartWeb: false }, executors: { dsh: { command: caseApi.fake.link } }, permissionPreset: 'workspace-write', unattendedApproval: 'deny', inheritEnv: 'designer' };
+  return createAdapter({ config, onEvent: () => {}, env: {}, state: { repoRoot: caseApi.repo, executor: {} } });
+}
+
+async function assertTurnRejectsWithoutUnhandled(label, openTurn) {
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on('unhandledRejection', onUnhandled);
+  let turn = null;
+  try {
+    const opened = await openTurn();
+    turn = opened.turn;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    assert.equal(unhandled.length, 0, label + ' 在等待前产生了未处理拒绝：' + unhandled.map((reason) => reason && reason.message ? reason.message : String(reason)).join('；'));
+    await assert.rejects(
+      Promise.race([
+        turn,
+        new Promise((resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error(label + ' 的这一轮没有在 1 秒内拒绝')), 1000);
+          if (typeof timer.unref === 'function') timer.unref();
+        }),
+      ]),
+      (error) => error && error.code === 'dsh_disconnected',
+      label + ' 的拒绝原因不是 dsh_disconnected',
+    );
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    if (turn) turn.catch(() => {});
+  }
+}
+
 async function directAdapter(caseApi, events) {
   const config = {
     dsh: { home: caseApi.dshHome, profile: 'web', transport: 'auto', autoStartWeb: false, openBrowserOnStart: false, webArgs: [] },
@@ -324,4 +386,73 @@ test('桥接连接被对端重置时适配器关闭底层 socket，不留句柄'
     await adapter.close().catch(() => {});
     await new Promise((resolve) => server.close(resolve));
   }
+});
+
+test('start 返回后、等待之前断开：不产生未处理拒绝，turn 以 dsh_disconnected 拒绝', async (t) => {
+  const caseApi = await createDshCase('unhandled-start');
+  const bridge = await startDisconnectBridge(caseApi);
+  const adapter = disconnectAdapter(caseApi);
+  t.after(async () => {
+    await adapter.close().catch(() => {});
+    await bridge.close();
+    await caseApi.cleanup();
+  });
+  await assertTurnRejectsWithoutUnhandled('start', async () => {
+    const started = await adapter.start({ cwd: caseApi.repo, runId: 'T001', title: 'x', brief: 'x', options: { permissionPreset: 'workspace-write', unattendedApproval: 'deny', agentPreset: 'agent-collab' }, env: {} });
+    bridge.disconnect();
+    return { turn: started.turn };
+  });
+});
+
+test('resume 返回后、等待之前断开：不产生未处理拒绝，turn 以 dsh_disconnected 拒绝', async (t) => {
+  const caseApi = await createDshCase('unhandled-resume');
+  const bridge = await startDisconnectBridge(caseApi);
+  const adapter = disconnectAdapter(caseApi);
+  t.after(async () => {
+    await adapter.close().catch(() => {});
+    await bridge.close();
+    await caseApi.cleanup();
+  });
+  await assertTurnRejectsWithoutUnhandled('resume', async () => {
+    const resumed = await adapter.resume({ sessionId: 'session-1', message: 'x' });
+    bridge.disconnect();
+    return { turn: resumed.turn };
+  });
+});
+
+test('attach 返回后、等待之前断开：不产生未处理拒绝，turn 以 dsh_disconnected 拒绝', async (t) => {
+  const caseApi = await createDshCase('unhandled-attach');
+  const bridge = await startDisconnectBridge(caseApi, { running: true });
+  const adapter = disconnectAdapter(caseApi);
+  t.after(async () => {
+    await adapter.close().catch(() => {});
+    await bridge.close();
+    await caseApi.cleanup();
+  });
+  await assertTurnRejectsWithoutUnhandled('attach', async () => {
+    const attached = await adapter.attach({ sessionId: 'session-1', sinceCursor: null });
+    assert.equal(attached.attached, true);
+    assert.equal(attached.running, true);
+    bridge.disconnect();
+    return { turn: attached.turn };
+  });
+});
+
+test('同一工作进程重发汇报：第二轮合法时任务为 done，finalText 不重复', async (t) => {
+  const caseApi = await createDshCase('report-resend-adapter');
+  t.after(() => caseApi.cleanup());
+  await caseApi.profile({ dependencies: { 'dsh-bridge': 'file:x' } });
+  const report = reportObject({ summary: '重发后的汇报' });
+  await caseApi.startWeb({
+    turns: [
+      [{ kind: 'text', text: '我改完了，但没有汇报块' }],
+      turnWithReport(report),
+    ],
+  });
+  const started = await caseApi.startTask({ env: { AGENT_COLLAB_TEST_IDLE_TIMEOUT_MS: '60000' } });
+  const wait = await caseApi.waitTask(started.runId);
+  assert.equal(wait.json.status, 'done', wait.stdout + wait.stderr);
+  assert.deepEqual(wait.summary.report, report);
+  assert.equal(wait.summary.turns.length, 2);
+  assert.equal(wait.summary.turns[1].kind, 'resend');
 });
