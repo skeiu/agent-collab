@@ -1,6 +1,6 @@
-本文件：`b2f69a7` 推送后 CI 仍在 macOS LTS、Windows Node 20 失败的修复任务书原文（交给 dsh）：桥接断开记成 `worker_lost`。派任务时让 dsh 读本文件执行；验收时对照；任务书改版时更新。
+本文件：dsh 适配器两个缺陷的修复任务书原文（交给 dsh）：`b2f69a7` 推送后 CI 仍在 macOS LTS、Windows Node 20 失败（桥接断开记成 `worker_lost`）；S6 在真实 dsh Web 上发现同一工作进程里要求重发时汇报文字重复。派任务时让 dsh 读本文件执行；验收时对照；任务书改版时更新。
 
-> 状态：定稿 2026-10-25，由 Claude 按用户 2026-10-24 的授权（到 2026-10-25 08:00 由 Claude 自行派发和审核）定稿，用户未逐份审阅。依据：CI 运行 40116306368（`b2f69a7`）：四组通过；macOS LTS、Windows Node 20 各 1 项失败，都是 `tests/dsh-adapter.test.mjs`“桥接断开：进行中的一轮以 failed 结束，statusReason 说明原因”。
+> 状态：定稿 2026-10-25，由 Claude 按用户 2026-10-24 的授权（到 2026-10-25 08:00 由 Claude 自行派发和审核）定稿，用户未逐份审阅。依据：CI 运行 40116306368（`b2f69a7`）：四组通过；macOS LTS、Windows Node 20 各 1 项失败，都是 `tests/dsh-adapter.test.mjs`“桥接断开：进行中的一轮以 failed 结束，statusReason 说明原因”；2026-10-25 S6 的 T9（见 docs/context/1a-acceptance.md）。
 
 你在 agent-collab 仓库根目录工作。先读 AGENTS.md、docs/context/RUNBOOK.md 的“派发 dsh 任务”、上一份任务书 docs/context/briefs/1a-ci-fix2-macos-windows.md（隔离和安全规则照旧有效）。
 
@@ -39,11 +39,19 @@ Windows Node 20 上是同一个堆栈，只是消息为 `read ECONNRESET`。上�
 3. 检查 `core/worker.mjs` 和适配器里有没有别的“先拿到 Promise、过一会儿才等”的地方有同样问题，一并改，汇报里列出。
 4. 工作进程本身不应因任何未处理的拒绝而悄悄退出、不写终态：看看工作进程有没有 `process.on('unhandledRejection')` / `uncaughtException` 兜底；没有的话，按 docs/protocol.md 的规定（终态、`worker.log`）提出你的建议写进汇报，先不实现。
 
+## 缺陷二：同一工作进程里要求重发时，汇报文字重复
+
+现象（S6，真实 dsh Web、桥接 `d53f0ab`）：第 1 轮执行端按要求只输出了普通文字，运行时判 `report_invalid` 后在同一个工作进程里续接一轮要求重发（`turnKind: resend`）。第 2 轮执行端输出了一个合法的 json 代码块（`events.jsonl` 里只有一条 `text` 事件，单独拿它调用 `core/report.mjs` 的 `extractReport` 能通过），但任务最终仍是 `report_invalid`：“汇报 JSON 不合法：Unexpected non-whitespace character after JSON at position 1041”。把这条文字重复两遍再 `extractReport`，得到的错误一字不差。
+
+原因（Claude 读代码的判断，请核实）：`core/adapters/dsh.mjs` 的 `resume` 每次都经 `chooseTransport` → `connectBridge` 新建一条连接，`start` 时建的连接没关、仍订阅着同一个会话；两条连接都收到同一批 `session/update`，`handleNotification` 每条都 `currentTurn.events.push(event)`，所以 `turnFinalText` 拼出两遍。写 `events.jsonl` 时按游标去了重，所以日志看不出来。工作进程里的续接只有“要求重发”这一处（`core/worker.mjs` 第 367 行附近），`run resume` 每次起新的工作进程，所以 T5 没碰到。
+
+要求：同一个适配器里续接时不出现两条连接同时向这一轮投递事件（例如复用还连着的连接，或先关掉旧的再连新的；也可以在 `currentTurn.events` 上按游标去重，但要说明为什么够）。先写一个修改前失败的测试：同一个工作进程里第 1 轮汇报不合法、第 2 轮重发合法，任务应为 `done`。
+
 只改 `core/`、`tests/` 里直接相关的代码。
 
 ## 验收标准
 
-- FX1：第 1 步的测试修改前失败（汇报失败信息原文）、修改后通过。
+- FX1：第 1 步的测试和缺陷二的测试修改前失败（汇报失败信息原文）、修改后通过。
 - FX2：`npm test` 连跑 3 次全部通过，无残留测试进程；按 RUNBOOK“按 CI 的条件重跑测试”在 `chmod 644` 副本里默认参数和 Node 20 模拟参数各跑一次，全部通过。
 - FX3：`node tests/integration/adapter-dsh.mjs` `RESULT: 通过`。
 - FX4：汇报写明产品改动（文件、函数、改前改后的行为、与 docs/protocol.md 是否一致；不一致的写出 protocol.md 应改成什么，不要改 docs/）。
