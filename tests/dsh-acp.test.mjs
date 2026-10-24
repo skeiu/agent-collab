@@ -199,6 +199,40 @@ test('acp 模式：run resume 另起子进程，session/resume 后发消息', as
   assert.equal(records.filter((record) => record.profile === 'acp').length, 2, 'resume 应另起一个 acp 子进程');
 });
 
+test('acp 模式：resume 的 session/resume 失败后任务 failed（executor_error），工作进程退出', async (t) => {
+  const blocked = reportObject({ status: 'blocked', summary: '需要答复' });
+  const caseApi = await createDshCase('acp-resume-error', {
+    config: { dsh: { home: null, profile: 'web', transport: 'acp' }, maxCorrectionRounds: 2 },
+    env: { FAKE_ACP_SCRIPT: acpScript(blocked) },
+  });
+  let workerPid = null;
+  t.after(async () => {
+    if (Number.isInteger(workerPid) && pidAlive(workerPid)) {
+      try { process.kill(workerPid, 'SIGKILL'); } catch { /* 已退出。 */ }
+      await waitForPidGone(workerPid, 2000);
+    }
+    await caseApi.cleanup();
+  });
+  await caseApi.writeWebPatch(webPatch);
+  const started = await caseApi.startTask();
+  const first = await caseApi.waitTask(started.runId);
+  assert.equal(first.json.status, 'blocked', first.stdout + first.stderr);
+
+  const message = path.join(caseApi.root, 'message.md');
+  await fsp.writeFile(message, '请继续');
+  const resumed = await caseApi.runCli(['run', 'resume', started.runId, '--kind', 'correction', '--message', message], {
+    env: { FAKE_ACP_SCRIPT: JSON.stringify({ failSessionResume: 'session/resume failed for test' }) },
+  });
+  assert.equal(resumed.json.ok, true, resumed.stdout + resumed.stderr);
+  workerPid = Number.isInteger(resumed.json.workerPid) ? resumed.json.workerPid : null;
+  const state = await waitForStatus(caseApi, started.runId, 'failed');
+  assert.equal(state.statusReason, 'executor_error');
+  const log = await fsp.readFile(path.join(await caseApi.runDir(started.runId), 'worker.log'), 'utf8');
+  assert.match(log, /任务结束：failed（executor_error）/);
+  const gone = await waitForPidGone(workerPid, 3000);
+  assert.equal(gone, true, 'resume 失败后工作进程仍未退出（pid ' + workerPid + '）');
+});
+
 test('acp 模式：工作进程被结束后 run wait 记为 failed（worker_lost）', async (t) => {
   const caseApi = await createDshCase('acp-worker-lost', {
     config: { dsh: { home: null, profile: 'web', transport: 'acp' } },

@@ -4,6 +4,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { atomicWriteJson } from './atomic-write.js';
+
 /** 本桥接实测并支持的 dsh 版本范围（含下限，不含下一个次版本）。 */
 export const SUPPORTED_DSH_RANGE = '>=0.2.1-rc.2 <0.3.0';
 
@@ -156,6 +158,9 @@ export function createDshApi(ctx) {
   // 会连带释放注册，会误伤其他会话。
   const sessionEnvBySession = new Map();
   const sessionEnvProviders = new Map();
+  // 会话环境要跨 Web 重启保留：dsh 没有稳定的会话级插件数据接口，桥接用自己的文件保存。
+  // 每个会话一个文件，格式 { v: 1, sessionId, env }；目录 0700、文件 0600。
+  const sessionEnvDirectory = homeDir === null ? null : path.join(homeDir, 'agent-collab', 'session-env');
   ctx.effect(() => () => {
     for (const provider of sessionEnvProviders.values()) {
       try { provider.dispose?.(); } catch { /* 已随上下文释放。 */ }
@@ -163,6 +168,20 @@ export function createDshApi(ctx) {
     sessionEnvProviders.clear();
     sessionEnvBySession.clear();
   });
+
+  function sessionEnvFile(sessionId) {
+    if (sessionEnvDirectory === null) return null;
+    if (typeof sessionId !== 'string' || !/^[A-Za-z0-9._-]+$/.test(sessionId)) return null;
+    return path.join(sessionEnvDirectory, sessionId + '.json');
+  }
+
+  function normalizeSessionEnv(env) {
+    const normalized = {};
+    for (const [key, value] of Object.entries(env ?? {})) {
+      if (typeof value === 'string') normalized[key] = value;
+    }
+    return normalized;
+  }
 
   function ensureSessionEnvProvider(key) {
     if (sessionEnvProviders.has(key)) return;
@@ -184,18 +203,69 @@ export function createDshApi(ctx) {
     sessionEnvProviders.set(key, { contributor, dispose });
   }
 
-  function setSessionEnv(sessionId, env) {
-    const normalized = {};
-    for (const [key, value] of Object.entries(env ?? {})) {
-      if (typeof value !== 'string') continue;
-      normalized[key] = value;
-      ensureSessionEnvProvider(key);
-    }
+  function applySessionEnv(sessionId, env) {
+    const normalized = normalizeSessionEnv(env);
+    for (const key of Object.keys(normalized)) ensureSessionEnvProvider(key);
     sessionEnvBySession.set(sessionId, normalized);
+    return normalized;
   }
 
+  function readSessionEnv(sessionId) {
+    const file = sessionEnvFile(sessionId);
+    if (file === null) return null;
+    try {
+      const record = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!record || record.v !== 1 || record.sessionId !== sessionId) return null;
+      if (!record.env || typeof record.env !== 'object' || Array.isArray(record.env)) return null;
+      const normalized = normalizeSessionEnv(record.env);
+      return Object.keys(normalized).length > 0 ? normalized : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function setSessionEnv(sessionId, env) {
+    const normalized = applySessionEnv(sessionId, env);
+    const file = sessionEnvFile(sessionId);
+    if (file === null) return;
+    try {
+      await atomicWriteJson(file, { v: 1, sessionId, env: normalized });
+    } catch (error) {
+      ctx.logger?.warn?.('agent-collab bridge: failed to persist session env for ' + sessionId + ': ' + (error && error.message ? error.message : String(error)));
+    }
+  }
+
+  /** 只清内存（桥接停止时用）：文件要留给 Web 重启后的下一轮。 */
   function clearSessionEnv(sessionId) {
     sessionEnvBySession.delete(sessionId);
+  }
+
+  /** 清内存并删除持久化文件（session/close 时用）。 */
+  function deleteSessionEnv(sessionId) {
+    sessionEnvBySession.delete(sessionId);
+    const file = sessionEnvFile(sessionId);
+    if (file === null) return;
+    try {
+      fs.rmSync(file, { force: true });
+    } catch (error) {
+      ctx.logger?.warn?.('agent-collab bridge: failed to delete session env for ' + sessionId + ': ' + (error && error.message ? error.message : String(error)));
+    }
+  }
+
+  function restoreSessionEnv(agent) {
+    const sessionId = agent && typeof agent.id === 'string' ? agent.id : null;
+    if (sessionId === null || sessionEnvBySession.has(sessionId)) return;
+    const values = readSessionEnv(sessionId);
+    if (values === null) return;
+    applySessionEnv(sessionId, values);
+  }
+
+  try {
+    ctx.on('agent/created', (payload) => {
+      restoreSessionEnv(payload && payload.agent);
+    }, { global: true });
+  } catch {
+    // 旧 dsh 没有 agent/created 时，只能靠 session/new、session/resume 里的登记。
   }
 
   try {
@@ -205,6 +275,13 @@ export function createDshApi(ctx) {
     }, { global: true });
   } catch {
     // 旧 dsh 没有 agent/disposed 时，session/close 仍会清理。
+  }
+
+  // 桥接插件热重载或启动时，已经活着的 agent 也要有注入；agent/created 只在创建/恢复时触发。
+  try {
+    for (const agent of ctx.agents.list()) restoreSessionEnv(agent);
+  } catch {
+    // 拿不到列表时不影响后续的 agent/created。
   }
 
   const api = {
@@ -315,6 +392,7 @@ export function createDshApi(ctx) {
 
     setSessionEnv,
     clearSessionEnv,
+    deleteSessionEnv,
 
     async listPermissionPresetSpecs() {
       const service = ctx.get('permissionPresets');

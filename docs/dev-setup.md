@@ -49,7 +49,7 @@ dsh 适配器的测试（`tests/detect.test.mjs`、`dsh-adapter`、`dsh-autostar
 
 测试清理时结束进程统一走 `tests/helpers/pids.mjs`，只结束还应该活着的进程：手里有句柄的，句柄还没退出才结束；运行时启动的工作进程，任务处于进行中、`worker.pid` 对得上、PID 存活才结束；假 dsh Web，发现文件还在、PID 存活才结束。不要在清理里按登记过的 PID 直接结束进程：Windows 很快复用 PID，会结束并行运行的别的测试进程（[RISKS.md](context/RISKS.md) R11）。断言命令退出码用 `assertExit`，失败时带上信号、stdout、stderr，两者都为空时写明没有任何输出。
 
-【已验证】2026-10-25，Linux、Node 22：`npm test` 连跑 3 次 227/227，跑完无残留进程；`chmod 644` 的副本在默认参数和 Node 20 模拟参数下各 227/227（方法见 [RUNBOOK.md](context/RUNBOOK.md)“按 CI 的条件重跑测试”）。
+【已验证】2026-10-25，Linux、Node 22：`npm test` 连跑 3 次 239/239，跑完无残留进程；`chmod 644` 的副本在默认参数和 Node 20 模拟参数下各 239/239；`TMPDIR` 设成符号链接（模拟 macOS 的 `/var`）时 239/239（方法见 [RUNBOOK.md](context/RUNBOOK.md)“按 CI 的条件重跑测试”）。
 
 ## 集成测试
 

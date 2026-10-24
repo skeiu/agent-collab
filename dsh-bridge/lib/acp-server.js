@@ -508,11 +508,11 @@ export class AcpBridgeServer {
     for (const conn of [...state.conns]) conn.enqueue({ method: '_agentCollab/status', params: status });
   }
 
-  /** 丢弃会话状态；只在 session/close 或桥接停止时调用。 */
+  /** 丢弃会话状态并删除持久化的会话环境；在 session/close 后没有连接时调用。 */
   dropSession(sessionId) {
     this.sessions.delete(sessionId);
     this.pendingModelControls.delete(sessionId);
-    this.dsh.clearSessionEnv(sessionId);
+    this.dsh.deleteSessionEnv(sessionId);
   }
 
   async ensureAgentPresetInfo() {
@@ -655,7 +655,7 @@ export class AcpBridgeServer {
     }
 
     const view = handle.view;
-    this.dsh.setSessionEnv(sessionId, env);
+    await this.dsh.setSessionEnv(sessionId, env);
     await view.setTitle(meta.title);
     let workspaceId = null;
     if (meta.attachWorkspace !== false) {

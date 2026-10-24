@@ -264,21 +264,85 @@ test('同一进程里的多个会话：shell 环境相互隔离，关闭一个�
   }
 });
 
+test('Web 重启后续接仍注入会话环境；agent 卸载后恢复也有；session/close 删除持久化文件', async () => {
+  const home = makeTempHome();
+  const cwd = fs.mkdtempSync(path.join(home, 'work-'));
+  const discoveryFile = path.join(home, 'agent-collab', 'bridge-web.json');
+  const envFile = (sessionId) => path.join(home, 'agent-collab', 'session-env', sessionId + '.json');
+  const expected = { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'one' };
+  let first = createFakeDsh({ homeDir: home });
+  let second = null;
+  let client = null;
+  try {
+    apply(first.ctx);
+    await waitFor(() => fs.existsSync(discoveryFile), 4000, '第一次的发现文件');
+    let discovery = JSON.parse(fs.readFileSync(discoveryFile, 'utf8'));
+    client = await connect(discovery);
+    await initialize(client, discovery);
+    const session = await newSession(client, cwd, { env: expected });
+    assert.deepEqual(first.fake.collectEnv(session.sessionId), expected);
+    await client.close();
+    client = null;
+    first.fake.dispose();
+    first = null;
+    await waitFor(() => !fs.existsSync(discoveryFile), 2000, '第一次的发现文件删除');
+
+    // 新的假 dsh 实例代表 Web 重启：同一个 DSH_HOME，内存里的会话表已经没了。
+    // 假 dsh 保存的会话 cwd 要和桥接 validateCwd 一样是真实路径；否则符号链接 TMPDIR 下续接会被
+    // 桥接的 cwd 校验拒绝（macOS 的 /var → /private/var）。
+    const realCwd = fs.realpathSync(cwd);
+    second = createFakeDsh({ homeDir: home, resumable: true, resumeCwd: realCwd, resumePreset: 'agent-collab' });
+    apply(second.ctx);
+    discovery = await waitFor(() => {
+      try { return JSON.parse(fs.readFileSync(discoveryFile, 'utf8')); } catch { return null; }
+    }, 4000, '重启后的发现文件');
+    client = await connect(discovery);
+    await initialize(client, discovery);
+    const resumed = await client.resumeSession({ sessionId: session.sessionId, cwd, mcpServers: [] });
+    assert.equal(resumed._meta.agentCollab.alreadyLoaded, false);
+    assert.deepEqual(second.fake.collectEnv(session.sessionId), expected, 'Web 重启后续接应恢复会话环境');
+    assert.ok(fs.existsSync(envFile(session.sessionId)), 'session/new 后应写持久化文件');
+    if (process.platform !== 'win32') assert.equal(fs.statSync(envFile(session.sessionId)).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(fs.readFileSync(envFile(session.sessionId), 'utf8')), { v: 1, sessionId: session.sessionId, env: expected });
+
+    assert.equal(second.fake.disposeAgent(session.sessionId), true);
+    assert.deepEqual(second.fake.collectEnv(session.sessionId), {}, 'agent 卸载后不应继续注入');
+    await second.fake.resumeAgentDirect(session.sessionId, realCwd, 'agent-collab');
+    assert.deepEqual(second.fake.collectEnv(session.sessionId), expected, 'agent 卸载后被 Web 直接恢复也应恢复会话环境');
+
+    const plain = second.fake.makeSession('plain-session', cwd, null).agent;
+    assert.deepEqual(second.fake.shellEnv.collect({ agent: plain }), {}, '非 agent-collab 会话不应有桥接注入');
+
+    await client.closeSession({ sessionId: session.sessionId });
+    await delay(50);
+    assert.equal(fs.existsSync(envFile(session.sessionId)), false, 'session/close 后应删除持久化文件');
+    assert.deepEqual(second.fake.collectEnv(session.sessionId), {}, 'session/close 后不应继续注入');
+  } finally {
+    if (client) await client.close().catch(() => {});
+    if (first) first.fake.dispose();
+    if (second) second.fake.dispose();
+    await delay(50);
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('新工作区用目录名而不是会话标题；已有工作区不改名', async () => {
   const box = await startBridge();
   try {
     const client = await connect(box.discovery);
     await initialize(client, box.discovery);
     const cwd = workDir(box);
+    // 桥接按 validateCwd 的 realpath 建工作区；临时目录本身可能是符号链接（macOS 的 /var → /private/var）。
+    const realCwd = fs.realpathSync(cwd);
     const first = await newSession(client, cwd, { title: '[collab] T001 任务标题' });
-    const workspace = box.fakeDsh.workspaces.find((item) => item.path === cwd);
+    const workspace = box.fakeDsh.workspaces.find((item) => item.path === realCwd);
     assert.ok(workspace, '应创建对应工作区');
-    assert.equal(workspace.title, path.basename(cwd), '新工作区标题应为目录名');
+    assert.equal(workspace.title, path.basename(realCwd), '新工作区标题应为目录名');
     assert.notEqual(workspace.title, '[collab] T001 任务标题');
 
     const second = await newSession(client, cwd, { runId: 'T002', title: '[collab] T002 另一个标题' });
     assert.equal(second._meta.agentCollab.workspaceId, first._meta.agentCollab.workspaceId, '同一路径应复用工作区');
-    assert.equal(workspace.title, path.basename(cwd), '已有工作区不应被改名为会话标题');
+    assert.equal(workspace.title, path.basename(realCwd), '已有工作区不应被改名为会话标题');
     await client.close();
   } finally {
     await stopBridge(box);

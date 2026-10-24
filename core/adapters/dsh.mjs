@@ -324,6 +324,16 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
   let webLogFile = null;
   let currentPolicy = 'deny';
   let replayFilter = null;
+  // 适配器主动关闭的连接：close 事件只表示我们换连接/收尾，不是 dsh 断线。
+  const intentionallyClosing = new WeakSet();
+
+  function closeClientQuietly(client) {
+    if (!client) return Promise.resolve();
+    intentionallyClosing.add(client);
+    return Promise.resolve()
+      .then(() => client.close())
+      .catch(() => {});
+  }
 
   function emit(event) {
     try {
@@ -375,10 +385,12 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
   function attachClientHandlers(client) {
     client.on('close', (error) => {
       if (closed) return;
+      // 自己主动关闭的连接不算断线，也不拒绝这一轮。
+      if (intentionallyClosing.has(client)) return;
       const message = 'dsh 连接断开：' + (error && error.message ? error.message : '连接关闭');
       log(message);
       // S2 留下的要求：JsonRpcPeer 只发 close，不回收底层 socket 或子进程。
-      void client.close().catch(() => {});
+      void closeClientQuietly(client);
       if (currentTurn) {
         const turn = currentTurn;
         currentTurn = null;
@@ -439,7 +451,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
     if (!current || !current.client) return;
     const previous = current.client;
     current = null;
-    await previous.close().catch(() => {});
+    await closeClientQuietly(previous);
   }
 
   function makeTurn(client, sessionId, promptText) {
@@ -497,7 +509,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       images = Boolean(init && init.agentCapabilities && init.agentCapabilities.promptCapabilities && init.agentCapabilities.promptCapabilities.image);
       return { client, init };
     } catch (error) {
-      if (client) await client.close().catch(() => {});
+      if (client) await closeClientQuietly(client);
       const code = error && Number.isInteger(error.code) ? error.code : null;
       const reason = code === -32001 ? 'unauthorized（令牌被拒绝）' : code === -32002 ? 'protocol_incompatible（协议无交集）' : (error && error.message ? error.message : String(error));
       const wrapped = new Error('连接桥接失败：' + reason);
@@ -687,7 +699,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
     try {
       await client.initialize({ clientInfo: { name: 'agent-collab', version: packageManifest.version } });
     } catch (error) {
-      await client.close().catch(() => {});
+      await closeClientQuietly(client);
       throw error;
     }
     return client;
@@ -730,7 +742,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       return { sessionId, transport: 'acp', model: model.model ?? (overlay.entries.find((entry) => entry.id === 'acp')?.config ?? null), turn: turn.promise };
     } catch (error) {
       if (current && current.client === client) current = null;
-      await client.close().catch(() => {});
+      await closeClientQuietly(client);
       throw error;
     }
   }
@@ -778,7 +790,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       };
     } catch (error) {
       if (current && current.client === client) current = null;
-      await client.close().catch(() => {});
+      await closeClientQuietly(client);
       throw error;
     }
   }
@@ -829,7 +841,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
         try {
           await client.resumeSession({ sessionId, cwd: cwd ?? process.cwd(), mcpServers: [] });
         } catch (error) {
-          await client.close().catch(() => {});
+          await closeClientQuietly(client);
           throw error;
         }
         const turn = makeTurn(client, sessionId, message);
@@ -840,7 +852,12 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       await setOverlay(await buildAcpOverlay({ dshInfo: choice.info, model: null, env: process.env }));
       if (overlay.warning) warn(overlay.warning);
       const client = await spawnAcpClient(choice.info);
-      await client.resumeSession({ sessionId, cwd: cwd ?? process.cwd(), mcpServers: [] });
+      try {
+        await client.resumeSession({ sessionId, cwd: cwd ?? process.cwd(), mcpServers: [] });
+      } catch (error) {
+        await closeClientQuietly(client);
+        throw error;
+      }
       const turn = makeTurn(client, sessionId, message);
       current = { client, transport: 'acp', sessionId };
       transportChanged('acp');
@@ -866,7 +883,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       } catch (error) {
         replayFilter = null;
         currentTurn = null;
-        await client.close().catch(() => {});
+        await closeClientQuietly(client);
         if (error && (error.code === -32003 || error.code === -32002)) return { attached: false };
         throw error;
       } finally {
@@ -890,7 +907,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       }
       if (!turn.end) {
         currentTurn = null;
-        await client.close().catch(() => {});
+        await closeClientQuietly(client);
         return { attached: false };
       }
       currentTurn = null;
@@ -911,7 +928,7 @@ export function createAdapter({ config, onEvent, log = () => {}, env = process.e
       if (closed) return;
       closed = true;
       if (current && current.client) {
-        try { await current.client.close(); } catch { /* 已关闭 */ }
+        await closeClientQuietly(current.client);
       }
       // 自动启动的 Web 是独立常驻进程，不在任务结束时结束它（它可能已经是用户在用的 Web）。
       webChild = null;

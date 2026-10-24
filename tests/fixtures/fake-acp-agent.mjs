@@ -58,7 +58,10 @@ function createAgentPeer(readable, writable, label) {
     return { sessionId: activeSessionId, configOptions: [], _meta: params && params._meta };
   });
 
-  peer.onRequest('session/resume', () => ({ configOptions: [] }));
+  peer.onRequest('session/resume', () => {
+    if (script.failSessionResume) throw new Error(script.failSessionResume === true ? 'session/resume failed for test' : String(script.failSessionResume));
+    return { configOptions: [] };
+  });
   peer.onRequest('session/set_config_option', () => ({ configOptions: [] }));
   peer.onRequest('session/close', () => ({}));
   peer.onRequest('_test/echo', (params) => params);

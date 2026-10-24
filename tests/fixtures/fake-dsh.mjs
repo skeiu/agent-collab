@@ -74,6 +74,7 @@ export function createFakeDsh(options = {}) {
   const sessionHandlers = [];
   const agentErrorHandlers = [];
   const agentDisposedHandlers = [];
+  const agentCreatedHandlers = [];
   const effects = [];
   const fake = {
     home,
@@ -107,6 +108,15 @@ export function createFakeDsh(options = {}) {
     },
     collectEnv(sessionId) {
       return fake.shellEnv.collect({ agent: agents.get(sessionId) });
+    },
+    async emitAgentCreated(agent, source = 'startup') {
+      for (const handler of agentCreatedHandlers) await handler({ agent, source });
+    },
+    async resumeAgentDirect(sessionId, cwd, preset) {
+      let agent = agents.get(sessionId);
+      if (!agent) agent = fake.makeSession(sessionId, cwd ?? fake.home, preset ?? null).agent;
+      await fake.emitAgentCreated(agent, 'resume');
+      return agent;
     },
     disposeAgent(sessionId) {
       const agent = agents.get(sessionId);
@@ -163,6 +173,7 @@ export function createFakeDsh(options = {}) {
       };
       if (typeof createOptions.setup === 'function') await createOptions.setup(agentCtx, agent);
       fake.created.push({ sessionId, agentOptions: createOptions.agentOptions, preset: agent.session.header.agentPreset });
+      await fake.emitAgentCreated(agent, 'startup');
       return { agent, async dispose() { agents.delete(sessionId); } };
     },
     async resume(resumeOptions) {
@@ -180,6 +191,7 @@ export function createFakeDsh(options = {}) {
         on() { return () => {}; },
       };
       if (typeof resumeOptions.setup === 'function') await resumeOptions.setup(agentCtx, agent);
+      await fake.emitAgentCreated(agent, 'resume');
       return { agent, async dispose() {} };
     },
     get(id) { return agents.get(id); },
@@ -307,6 +319,7 @@ export function createFakeDsh(options = {}) {
       if (event === 'session/event') sessionHandlers.push(handler);
       else if (event === 'agent/error') agentErrorHandlers.push(handler);
       else if (event === 'agent/disposed') agentDisposedHandlers.push(handler);
+      else if (event === 'agent/created') agentCreatedHandlers.push(handler);
       void eventOptions;
       return () => {};
     },

@@ -438,6 +438,24 @@ test('attach 返回后、等待之前断开：不产生未处理拒绝，turn �
   });
 });
 
+test('同一工作进程续接前关闭旧连接：worker.log 不记断线，任务正常完成', async (t) => {
+  const caseApi = await createDshCase('resume-close-old-connection');
+  t.after(() => caseApi.cleanup());
+  await caseApi.profile({ dependencies: { 'dsh-bridge': 'file:x' } });
+  const report = reportObject({ summary: '续接后的汇报' });
+  await caseApi.startWeb({
+    turns: [
+      [{ kind: 'text', text: '第一轮没有汇报块' }],
+      turnWithReport(report),
+    ],
+  });
+  const started = await caseApi.startTask({ env: { AGENT_COLLAB_TEST_IDLE_TIMEOUT_MS: '60000' } });
+  const wait = await caseApi.waitTask(started.runId);
+  assert.equal(wait.json.status, 'done', wait.stdout + wait.stderr);
+  const log = await fsp.readFile(path.join(await caseApi.runDir(started.runId), 'worker.log'), 'utf8');
+  assert.doesNotMatch(log, /dsh 连接断开/, '适配器主动关闭旧连接不应记成断线');
+});
+
 test('同一工作进程重发汇报：第二轮合法时任务为 done，finalText 不重复', async (t) => {
   const caseApi = await createDshCase('report-resend-adapter');
   t.after(() => caseApi.cleanup());

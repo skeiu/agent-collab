@@ -191,3 +191,9 @@
   - 真实 Web 上重跑 T9 通过（见 [1a-acceptance.md](1a-acceptance.md)）。修复前的代码在这种情形下工作进程也不退出（旧连接一直开着；r2 的 T001 留下的工作进程 22 分钟后由 Claude 按 PID 结束）。
   - 留下的问题（[RISKS.md](RISKS.md) R13）：主动关旧连接时 worker.log 会记一条“dsh 连接断开：ACP client closed”，不影响结果但会误导排查；工作进程没有 `unhandledRejection`/`uncaughtException` 兜底，dsh 建议兜底后按 `failed` 收尾并在 protocol.md §5.5 写明；acp 模式的 `resume` 在 `resumeSession` 失败时没关新建的子进程（dsh 读代码发现，未验证）。
   - 推送后 CI 运行 40119684014（`c7e50e2`）：Ubuntu、Windows 四组通过，“桥接断开”在所有平台都好了；macOS 两组各剩 1 项：桥接修复新加的“新工作区用目录名”用例拿没解析的临时路径找工作区（测试问题）。上一次（`965ca04`）Windows LTS 上出现过一次“run wait 返回时它启动的工作进程都已退出”失败，这次没有，记为观察（R11）。和 Web 重启后环境丢失、R13 里两项一起写成 [briefs/1a-fix4-env-resume.md](briefs/1a-fix4-env-resume.md)。
+- 2026-10-25 第四份修复（[briefs/1a-fix4-env-resume.md](briefs/1a-fix4-env-resume.md)：Web 重启后续接时执行端环境变量丢失、macOS 工作区用例、R13 里的两处）由 Claude 按用户授权派发，dsh 交付，验收通过：FV1–FV5 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `fx4-baseline.txt`，profiles 哈希、用户 dsh Web 进程号不变；会话日志 `workspace-write`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
+  - 重跑：`npm test` 3 次 239/239；`chmod 644` 副本默认参数、Node 20 模拟参数各 239/239；`TMPDIR` 设成符号链接时 239/239；`bridge-dsh.mjs`（普通和符号链接 `TMPDIR` 各一次）、`adapter-dsh.mjs` 都 `RESULT: 通过`。反证：撤回三个产品文件，新加的 3 个用例全部失败；旧版工作区用例在符号链接 `TMPDIR` 下失败（“应创建对应工作区”），新版通过。
+  - 第一次交付时，新加的“Web 重启后续接”用例在符号链接 `TMPDIR` 下失败（假 dsh 保存的会话 cwd 没解析），推送后 macOS 会红；Claude 退回同一会话修正，只改了 `tests/bridge.test.mjs`。
+  - 改法：桥接在 `session/new` 返回前把会话的 `env` 写进 `$DSH_HOME/agent-collab/session-env/<sessionId>.json`（目录 0700、文件 0600），dsh 的 `agent/created` 全局事件（创建和恢复都会发，见 dsh-agent 的 `agents.announce()`）和桥接启动时按会话 id 读回登记；agent 卸载、桥接停止只清内存；`session/close` 删文件。dsh 的 `appendPluginRecord` 是实验接口、限 dsh 仓库内部使用，没有采用。适配器主动关闭的连接打标记，`close` 处理不再记断线；acp `resume` 失败时关新建的 client。protocol.md 补了 §1.1（用户未审阅）。
+  - 留下的问题：运行时正常结束任务时不发 `session/close`，会话环境文件会一直积累（[RISKS.md](RISKS.md) R14）。

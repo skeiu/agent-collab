@@ -114,7 +114,8 @@ async function main() {
     { text: 'WRITE_DONE' },
     { text: 'CANCEL_ME', delayMs: 2500 },
     { text: 'HUMAN_STOP_ME', delayMs: 2500 },
-    { text: 'AFTER_RESUME' },
+    { toolCalls: [{ name: 'bash', arguments: { command: 'printf "%s|%s" "$DSH_AGENT_COLLAB_ROLE" "$DSH_AGENT_COLLAB_MARK"', description: 'Print the session environment after the web restart' } }] },
+    { text: 'AFTER_RESTART_ROLE_OK' },
   ];
   responses[0].toolCalls[0].arguments.command = 'printf "%s" "$' + 'DSH_AGENT_COLLAB_ROLE"';
   const fake = await createFakeLlm({ responses });
@@ -171,7 +172,11 @@ async function main() {
     client = await connectAndInitialize(discovery);
     const notifications = [];
     client.onNotification((method, params) => notifications.push({ method, params }));
-    const created = await client.newSession({ cwd: work, mcpServers: [], _meta: { agentCollab: sessionMeta() } });
+    const created = await client.newSession({
+      cwd: work,
+      mcpServers: [],
+      _meta: { agentCollab: sessionMeta({ env: { DSH_AGENT_COLLAB_ROLE: 'executor', DSH_AGENT_COLLAB_MARK: 'one' } }) },
+    });
     if (created._meta.agentCollab.agentPreset !== 'agent-collab') fail('会话没有挂上 agent-collab 预设');
     if (created._meta.agentCollab.presetFallback !== null) fail('agent-collab 预设不应退回');
     if (created._meta.agentCollab.workspaceId === null) fail('会话没有挂到工作区');
@@ -293,15 +298,36 @@ async function main() {
       if (seq > sinceSeq && !replayKeys.has(key)) fail('补发缺少事件：' + key);
     }
 
-    for (const session of [created, created2, created3]) await client.closeSession({ sessionId: session.sessionId });
+    const envFile = path.join(box.home, 'agent-collab', 'session-env', created.sessionId + '.json');
+    if (!fs.existsSync(envFile)) fail('session/new 后没有写会话环境文件');
+    await client.closeSession({ sessionId: created3.sessionId });
     await client.close();
     client = null;
+
+    // Web 重启：换一个 dsh Web 进程，同一个 DSH_HOME；桥接内存里的会话表已经没了。
+    await stopChild(web.child);
+    web = null;
+    await waitFor(() => !fs.existsSync(discoveryFile), 10000, '重启前退出后删除发现文件');
+    web = await startWeb(box.env, dsh, { cwd: work });
+    await waitFor(() => fs.existsSync(discoveryFile), 30000, '重启后的发现文件');
+    const restarted = JSON.parse(fs.readFileSync(discoveryFile, 'utf8'));
+    if (restarted.problem !== undefined) fail('重启后的发现文件带 problem：' + restarted.problem);
+    client = await connectAndInitialize(restarted);
+    const resumedAfterRestart = await client.resumeSession({ sessionId: created.sessionId, cwd: work, mcpServers: [] });
+    if (resumedAfterRestart._meta.agentCollab.alreadyLoaded !== false) fail('Web 重启后续接的 alreadyLoaded 不是 false');
+    const restartPrompt = await client.promptText(created.sessionId, 'Check the role environment after the web restart.', { timeoutMs: 120000 });
+    if (restartPrompt._meta.agentCollab.endReason !== 'completed') fail('Web 重启后的 prompt 没有正常结束');
+    if (!requestContains(fake, 'executor|one')) fail('Web 重启后续接的 shell 环境里 DSH_AGENT_COLLAB_ROLE/DSH_AGENT_COLLAB_MARK 丢失');
+    await client.closeSession({ sessionId: created.sessionId });
+    await client.close();
+    client = null;
+    if (fs.existsSync(envFile)) fail('session/close 后会话环境文件应删除');
 
     await stopChild(web.child);
     web = null;
     await waitFor(() => !fs.existsSync(discoveryFile), 10000, '退出后删除发现文件');
     passed = true;
-    console.log('RESULT: 通过 — 临时 DSH_HOME 中完成插件安装、三会话环境隔离、工作区命名、工具、审批、取消、Web 内停止和重连补发；退出后发现文件已删除。');
+    console.log('RESULT: 通过 — 临时 DSH_HOME 中完成插件安装、三会话环境隔离、工作区命名、工具、审批、取消、Web 内停止、重连补发，以及 Web 重启后的会话环境恢复；退出后发现文件已删除。');
   } finally {
     if (client) await client.close().catch(() => {});
     if (web) await stopChild(web.child).catch(() => {});
