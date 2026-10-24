@@ -27,6 +27,8 @@
 
 ## 阻塞与待核实
 
+- 2026-10-23 经用户授权推送 S1、S2（`176eb90`）。CI 在 Linux、macOS 通过；Windows 卡在 `tests/config.test.mjs`（`saveConfig` 改名抛 `EPERM` 后测试挂住），运行已由用户中断。修复（[briefs/1a-ci-windows-fix.md](briefs/1a-ci-windows-fix.md)）2026-10-24 验收通过【已验证】2026-10-24（见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），同日经用户授权提交并推送；Windows 是否修好以推送后的 CI 为准【待核实】。
+
 - 【待核实】`package.json` 写了 `"license": "MIT"`，但 LICENSE 文件还没建；版权人署名需用户提供（PLAN.md §7.1、§18）。
 - 【待核实】PLAN.md §3 中 D1–D19 的确认人（见 [DECISIONS.md](DECISIONS.md)）。
 - 【待核实】本次文档结构（MAP 并入 PROJECT_INDEX.md，RISKS 和 DECISIONS 独立）是 AI 采用的方案，待用户认可。

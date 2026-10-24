@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { AcpBridgeServer, PROTOCOL_MIN, PROTOCOL_VERSION } from './acp-server.js';
+import { atomicWriteJson } from './atomic-write.js';
 import { createDshApi, isDshVersionSupported, SUPPORTED_DSH_RANGE } from './dsh-api.js';
 
 export const name = 'agent-collab-bridge';
@@ -14,31 +15,6 @@ export const bridgeVersion = packageManifest.version;
 
 function discoveryPath(homeDir, profile) {
   return path.join(homeDir, 'agent-collab', 'bridge-' + profile + '.json');
-}
-
-function atomicWriteJson(file, value) {
-  const directory = path.dirname(file);
-  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
-  try {
-    fs.chmodSync(directory, 0o700);
-  } catch {
-    // Windows 或没有权限位的文件系统。
-  }
-  const temporary = file + '.tmp-' + process.pid + '-' + Date.now();
-  fs.writeFileSync(temporary, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
-  try {
-    fs.renameSync(temporary, file);
-  } catch (error) {
-    // Windows 上 rename 不能覆盖已存在的目标文件。
-    if (process.platform !== 'win32') throw error;
-    fs.rmSync(file, { force: true });
-    fs.renameSync(temporary, file);
-  }
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    // Windows 或没有权限位的文件系统。
-  }
 }
 
 function removeDiscoveryFile(file) {
@@ -83,7 +59,7 @@ async function start(ctx) {
     ...problem === null ? {} : { problem },
   };
   try {
-    atomicWriteJson(file, record);
+    await atomicWriteJson(file, record);
   } catch (error) {
     await server.stop();
     throw error;

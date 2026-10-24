@@ -9,7 +9,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "test": "node --test",
+    "test": "node --test --test-timeout=60000",
     "build": "node scripts/build.mjs"
   }
 }

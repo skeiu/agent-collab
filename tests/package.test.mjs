@@ -18,6 +18,6 @@ test('package.json 不声明任何依赖', () => {
 test('package.json 的模块类型、engines 和 scripts 符合约定', () => {
   assert.equal(pkg.type, 'module');
   assert.equal(pkg.engines?.node, '>=20');
-  assert.equal(pkg.scripts?.test, 'node --test');
+  assert.equal(pkg.scripts?.test, 'node --test --test-timeout=60000');
   assert.equal(pkg.scripts?.build, 'node scripts/build.mjs');
 });

@@ -38,11 +38,12 @@ test('scripts/build.mjs 把 dsh-bridge 打成 .tgz，--out 生效，包内没有
     assert.deepEqual(entries, [
       'package/cordis.patch.yml',
       'package/lib/acp-server.js',
+      'package/lib/atomic-write.js',
       'package/lib/dsh-api.js',
       'package/lib/index.js',
       'package/lib/jsonrpc.js',
       'package/package.json',
-    ], '包内文件应为 package.json、cordis.patch.yml 和 lib/ 下的四个文件');
+    ], '包内文件应为 package.json、cordis.patch.yml 和 lib/ 下的五个文件');
 
     const bridgePackage = JSON.parse(await readFile(path.join(repoRoot, 'dsh-bridge', 'package.json'), 'utf8'));
     assert.equal(bridgePackage.version, packageJson.version, '桥接版本应与仓库根目录一致');

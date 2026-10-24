@@ -341,11 +341,15 @@ test('saveConfig 的写入是原子的：并发读取始终能看到完整 JSON'
         await new Promise((resolve) => setTimeout(resolve, 1));
       }
     })();
-    for (let index = 0; index < 30; index += 1) {
-      await saveConfig(file, applyDefaults(configSchema, { protectedPaths: ['p' + index] }));
+    // 写入抛错时也要停掉读循环，否则后台计时器会让测试挂住。
+    try {
+      for (let index = 0; index < 30; index += 1) {
+        await saveConfig(file, applyDefaults(configSchema, { protectedPaths: ['p' + index] }));
+      }
+    } finally {
+      stop = true;
+      await reader;
     }
-    stop = true;
-    await reader;
     assert.equal(bad, 0, 'reader saw partial JSON ' + bad + ' times');
     assert.ok(reads > 0);
   } finally {
