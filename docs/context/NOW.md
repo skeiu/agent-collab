@@ -40,7 +40,7 @@
   - 抢旧锁的测试读锁时撞上 Windows“删除中”的文件，得到 `EPERM`；
   - `run resume` 那条用例的第一轮记成了 `failed`，CI 没有输出 `worker.log`，原因不明。
 
-  修复任务书 [briefs/1a-s3-ci-winlock.md](briefs/1a-s3-ci-winlock.md) 和它依据的 protocol.md §5.2“正在删除的文件”一条【已确认】用户 2026-10-24；2026-10-24 由 Claude 在 dsh Web 派发（基准 `.git/agent-collab-baselines/s3wl-baseline.txt`），同日交付，验收通过：WL1–WL5 全部通过【已验证】2026-10-24（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”）；dev-setup.md 已回填；未提交。遗留：`run cancel` 结束工作进程那条路径没有处理 `lock_unreadable`，留到下一轮。返工前第 8、9 条（`attach` 时本轮已结束要带回结果、对停下的任务允许 `run cancel`）【已确认】用户 2026-10-24，已先改 protocol.md §3、§5.5、§6 和 PLAN.md §11.3。返工派发前基准已记（`.git/agent-collab-baselines/s3rw-baseline.txt`）。
+  修复任务书 [briefs/1a-s3-ci-winlock.md](briefs/1a-s3-ci-winlock.md) 和它依据的 protocol.md §5.2“正在删除的文件”一条【已确认】用户 2026-10-24；2026-10-24 由 Claude 在 dsh Web 派发（基准 `.git/agent-collab-baselines/s3wl-baseline.txt`），同日交付，验收通过：WL1–WL5 全部通过【已验证】2026-10-24（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”）；dev-setup.md 已回填。同日经用户授权提交并推送（`b14504a`）。CI 运行 40089287530 第 1 次尝试时 Windows LTS 的 `run-stall.test.mjs` 文件级失败、没有输出；重跑后 6 组全部通过【已验证】2026-10-24，偶发失败记为 [RISKS.md](RISKS.md) R11。遗留：`run cancel` 结束工作进程那条路径没有处理 `lock_unreadable`，留到下一轮。返工前第 8、9 条（`attach` 时本轮已结束要带回结果、对停下的任务允许 `run cancel`）【已确认】用户 2026-10-24，已先改 protocol.md §3、§5.5、§6 和 PLAN.md §11.3。返工派发前基准已记（`.git/agent-collab-baselines/s3rw-baseline.txt`）。
 3. P15（Windows 桌面版探针，PLAN.md §17 第 15 项）：任务书 [briefs/1a-p15-desktop-windows.md](briefs/1a-p15-desktop-windows.md) 已定稿，待用户派发给 dsh；dsh 交付、Claude 核对空跑后，Windows 上由那台机器的 Claude Code 按 README 执行，这边的 Claude 对照结果文件验收。
 4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
 5. 每次提交和推送都须用户授权。
