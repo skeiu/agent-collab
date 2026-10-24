@@ -70,14 +70,23 @@ git grep --cached -nIiE -e '/hom[e]/|/User[s]/|[A-Z]:.User[s]|session-[0-9a-f]{6
 
 依据 [RISKS.md](RISKS.md) R6：写代码的 dsh 会话跑在用户日常的 dsh Web 里，被测的 dsh 必须与它隔离。第 1a 阶段起所有交给 dsh 的任务都按下面执行；任务书原文存在 [briefs/](briefs/)，派发时让 dsh 读文件执行。
 
-1. **派任务前**：用户在 dsh Web 里把这个会话的权限切到 `workspace-write`，确认显示的是 `workspace-write` 后再贴任务书。
+1. **派任务前**：在 dsh Web 里把这个会话的权限切到 `workspace-write`，确认显示的是 `workspace-write` 后再贴任务书。由谁操作见下面“Claude 在内置浏览器里派发”。
 2. **第一步自检**：任务书第一步运行 `pgrep -af dsh` 和 `cat /proc/1/cmdline | tr '\0' ' '`，原样汇报。看到用户日常的 dsh Web 进程，说明沙箱没有隔离进程，**停下来汇报**，由用户决定是否继续。
 3. **被测 dsh 一律用临时环境**：`DSH_HOME` 设为 `os.tmpdir()` 下新建的目录，`dsh web` 加 `--port 0 --no-open`，从输出里解析实际端口。脚本运行任何 `dsh` 命令前都要断言 `DSH_HOME` 位于临时目录下，否则退出。
 4. **缓存重定向到临时目录**：`COREPACK_HOME`、`npm_config_cache`、`PNPM_HOME`、`XDG_CACHE_HOME`、`XDG_DATA_HOME`、`XDG_RUNTIME_DIR`（pnpm 12 把 store 操作锁建在这里，2026-10-23 验收时发现）。
 5. **只停自己启动的进程**：按自己 spawn 得到的 PID 停止，禁止 `kill`/`pkill`/`killall`/`fuser` 按名字或端口找进程。
 6. **不碰用户的 dsh**：不读写 `~/.dsh`（包括其中的凭据、`.env`、会话），不访问 dsh 的默认端口，不对默认 `DSH_HOME` 运行任何 `dsh` 命令。
    - **需要真实模型时的例外**（用户 2026-10-23 为第 1a 阶段第 2 批同意，以后沿用须在任务书里写明）：可以**只读**真实 web profile 的 `cordis.patch.yml`，从中挑出 `llm-*` 和 `agent-default-model` 条目，复制进临时 `DSH_HOME`；可以在临时 `DSH_HOME` 里建符号链接 `.env`，指向真实的 `$DSH_HOME/.env`，由被测 dsh 自己读取。实验代码和执行端都不得打开、打印或复制 `.env` 的内容，也不得写真实 `DSH_HOME` 里的任何文件。
-7. **审批**：dsh 发出的越权审批，用户一律拒绝；需要越权才能做的实验，记为发现并汇报。
+7. **审批**：dsh 发出的越权审批一律拒绝；需要越权才能做的实验，记为发现并汇报。
+
+**Claude 在内置浏览器里派发**（用户 2026-10-24 同意，边界如下）：
+
+- 登录：dsh Web 要带令牌的地址才能进；由用户在 Claude 桌面版的内置浏览器里打开一次，登录状态会保留。Claude 不填令牌，也不从 dsh 的文件里找令牌。dsh Web 重启换了令牌时，请用户重新打开。
+- 派发什么：只派用户定稿的任务书；用户说“定稿”即同意 Claude 派发，每次派发在对话里说明。
+- 怎么派：每个任务开新会话，先切 `workspace-write`，在页面上确认生效后再发“读 docs/context/briefs/<文件> 并按它执行。”；验收时照旧从会话日志的 `permission/preset` 核实。
+- 审批：任务书范围外的一律拒绝；看不准是否越权的，停下问用户；Claude 不点批准。
+- 不碰：其他会话、dsh 的设置、profile 和模型、dsh Web 进程本身。
+- 等待：在后台等会话日志不再更新，不反复截图；跑完从页面读汇报，再按下面的核对和验收方法自己重跑。验收结论和提交授权仍归用户。
 
 **派发后的核对（Claude 验收时做）**：派任务前记下用户 dsh Web 的 PID、`~/.dsh/profiles/*` 下 `package.json` 和 `cordis.patch.yml` 的哈希、插件目录（用到例外时再加 `.env` 的哈希和修改时间，只存在 Claude 的临时目录）；完成后对比，并按下面“核对 dsh 会话做了什么”查权限事件、执行过的命令和汇报。【已验证】2026-10-23：第 1a 阶段三次派发均按此执行。
 

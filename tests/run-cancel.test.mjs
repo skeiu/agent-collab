@@ -10,8 +10,8 @@ import {
   makeReport,
   pathExists,
   pidAlive,
+  readCommands,
   readJson,
-  readRecord,
   runCli,
   startFakeExecutor,
   turnWithReport,
@@ -100,10 +100,12 @@ test('工作进程不响应取消时，run cancel 按 PID 结束它并记为 can
 test('run cancel 等待期间任务自己以 done 结束：不结束进程，summary 保留原结果（RW3）', async (t) => {
   const ctx = await createContext('cancel-done-race');
   t.after(() => ctx.cleanup());
-  // 取消轮询调慢：这一段跑完时工作进程还没看到 cancel.request。
+  // 不依赖“这一轮跑得比工作进程的轮询快”：工作进程查 cancel.request 的间隔调到整个用例都等不到，
+  // run cancel 自己的等待间隔单独调快，这样工作进程根本不会先看到取消，一定先以 done 收尾。
   const env = {
     AGENT_COLLAB_TEST_CANCEL_TIMEOUT_MS: '15000',
-    AGENT_COLLAB_TEST_CANCEL_POLL_MS: '1200',
+    AGENT_COLLAB_TEST_CANCEL_POLL_MS: '60000',
+    AGENT_COLLAB_TEST_CANCEL_WAIT_POLL_MS: '50',
     AGENT_COLLAB_TEST_STALL_POLL_MS: '5000',
   };
   const { executor, start, statePath } = await startLongTask(ctx, {
@@ -145,6 +147,16 @@ test('run cancel 等待期间任务自己以 done 结束：不结束进程，sum
   assert.deepEqual(summary.report, summaryBefore.report);
   assert.deepEqual(summary.turns, summaryBefore.turns);
   if (reportBefore !== null) assert.equal(await fsp.readFile(reportPath, 'utf8'), reportBefore, 'report-1.json 不应被改动');
+  // FX4：工作进程确实没有先看到 cancel.request（否则测的就不是“任务自己先结束”）。
+  const events = (await fsp.readFile(path.join(start.json.runDir, 'events.jsonl'), 'utf8'))
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
+  assert.equal(
+    events.some((event) => event.type === 'warning' && String(event.message).includes('cancel.request')),
+    false,
+    '工作进程不应看到 cancel.request',
+  );
 });
 
 async function cancelSettledAndCheck(ctx, { executor, runDir, runId, expectedStatus }) {
@@ -152,7 +164,7 @@ async function cancelSettledAndCheck(ctx, { executor, runDir, runId, expectedSta
   const summaryBefore = await readJson(summaryPath);
   assert.equal(summaryBefore.status, expectedStatus);
   const stateBefore = await readJson(path.join(runDir, 'state.json'));
-  const recordBefore = (await readRecord(executor.recordPath)).length;
+  const commandsBefore = (await readCommands(executor)).length;
   const reportBefore = await fsp.readFile(path.join(runDir, 'report-1.json'), 'utf8').catch(() => null);
 
   const cancelled = await runCli(ctx, ['run', 'cancel', runId], { executor });
@@ -176,7 +188,16 @@ async function cancelSettledAndCheck(ctx, { executor, runDir, runId, expectedSta
   if (reportBefore !== null) {
     assert.equal(await fsp.readFile(path.join(runDir, 'report-1.json'), 'utf8'), reportBefore, 'report-1.json 不应被改动');
   }
-  assert.equal((await readRecord(executor.recordPath)).length, recordBefore, '对停下的任务取消不应联系执行端');
+  // “对停下的任务取消不应联系执行端”看命令记录，不看事件条数：执行端自己的这一轮可能还在跑，
+  // 负载重时事件会晚到，数条数会误判。任何类型的命令都算联系执行端（发一条 attach 也算），不只看 cancel。
+  const commandsAfter = await readCommands(executor);
+  const newCommands = commandsAfter.slice(commandsBefore);
+  assert.equal(commandsBefore > 0, true, '假执行端没有收到过命令，用例前提不成立');
+  assert.deepEqual(
+    newCommands,
+    [],
+    '对停下的任务取消不应联系执行端，但 run cancel 之后假执行端收到了新命令：' + JSON.stringify(newCommands),
+  );
 
   const messageFile = path.join(ctx.root, 'resume-' + runId + '.md');
   await fsp.writeFile(messageFile, '继续做\n');

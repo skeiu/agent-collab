@@ -194,7 +194,16 @@ export async function runCli(ctx, argv, options = {}) {
   const parsed = parseJsonOutput(result.stdout);
   // run start / run resume 会返回工作进程 pid：登记下来，用例失败时 cleanup 也能按 PID 结束它。
   if (parsed && Number.isInteger(parsed.workerPid)) ctx.workerPids.push(parsed.workerPid);
-  return { ...result, json: parsed };
+  // FX2：run wait 返回终态后，summary.json 必须已经可读。所有用例都走这里，统一断言。
+  let summary = null;
+  if (parsed && typeof parsed.summaryFile === 'string') {
+    try {
+      summary = await readJson(parsed.summaryFile);
+    } catch (error) {
+      throw new Error('run wait 返回后读不到 summary.json（' + parsed.summaryFile + '）：' + error.message);
+    }
+  }
+  return { ...result, json: parsed, summary };
 }
 
 export function parseJsonOutput(stdout) {
@@ -213,6 +222,46 @@ export function parseJsonOutput(stdout) {
 export async function readRecord(file) {
   const raw = await fsp.readFile(file, 'utf8');
   return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+}
+
+/** 假执行端收到 start 的次数（每次 start 记一行）。 */
+export async function readStartCount(executor) {
+  try {
+    const raw = await fsp.readFile(executor.recordPath + '.starts.jsonl', 'utf8');
+    return raw.split('\n').filter(Boolean).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** 假执行端收到的 attach 记录（每次 attach 记一行，带当时这一轮是否还在进行中）。 */
+export async function readAttachments(executor) {
+  try {
+    const raw = await fsp.readFile(executor.recordPath + '.attaches.jsonl', 'utf8');
+    return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+/** 假执行端收到的命令记录（start / resume / attach / cancel）。 */
+export async function readCommands(executor) {
+  try {
+    const raw = await fsp.readFile(executor.recordPath + '.commands.jsonl', 'utf8');
+    return raw.split('\n').filter(Boolean).map((line) => JSON.parse(line));
+  } catch {
+    return [];
+  }
+}
+
+/** 等 state.json 里出现 sessionId：杀工作进程之前先确认“接上”的是已有会话。 */
+export async function waitForSessionId(runDir, timeout = 8000) {
+  return waitFor(async () => {
+    const state = await readJson(path.join(runDir, 'state.json')).catch(() => null);
+    return state && state.executor && typeof state.executor.sessionId === 'string' && state.executor.sessionId !== ''
+      ? state
+      : null;
+  }, { label: 'state.json 里出现 sessionId', timeout });
 }
 
 /** 读 events.jsonl。 */

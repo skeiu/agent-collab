@@ -145,27 +145,35 @@ test('已跟踪且匹配 .gitignore 的文件被执行端修改：进补丁和 c
 test('中文路径、跨目录改名、带空格的路径和受保护路径里的 * 按字面处理（RW5）', async (t) => {
   const ctx = await createContext('paths');
   t.after(() => ctx.cleanup());
+  // Windows 文件名不能含 *，建 star*file.txt 会在 writeFile 时直接 ENOENT；只在非 Windows 上测这一部分，
+  // 中文、空格、跨目录改名和“受保护路径里的 * 不能按通配符匹配”照测。
+  const canUseStar = process.platform !== 'win32';
+  if (!canUseStar) {
+    t.diagnostic('Windows 文件名不能含 *：跳过 star*file.txt 的建文件和改名断言，保留星号按字面匹配的断言');
+  }
   const lines = (changedLine) =>
     Array.from({ length: 20 }, (_, index) => (index === changedLine ? 'line changed' : 'line ' + index)).join('\n') + '\n';
 
   await fsp.mkdir(path.join(ctx.repo, 'src', 'a'), { recursive: true });
   await fsp.writeFile(path.join(ctx.repo, 'src', 'a', 'f.js'), lines(-1));
   await fsp.writeFile(path.join(ctx.repo, '中文 文件.txt'), '一\n');
-  await fsp.writeFile(path.join(ctx.repo, 'star*file.txt'), 'x\n');
+  if (canUseStar) await fsp.writeFile(path.join(ctx.repo, 'star*file.txt'), 'x\n');
   await fsp.writeFile(path.join(ctx.repo, 'starXfile.txt'), 'x\n');
   await fsp.mkdir(path.join(ctx.repo, 'dir with space'), { recursive: true });
   await fsp.writeFile(path.join(ctx.repo, 'dir with space', 'file name.txt'), 'y\n');
   await run('git', ['add', '-A'], { cwd: ctx.repo });
   await run('git', ['commit', '-qm', 'paths'], { cwd: ctx.repo });
 
-  const { summary } = await runTask(ctx, [
+  const steps = [
     { kind: 'write', path: 'src/b/f.js', content: lines(5) },
     { kind: 'delete', path: 'src/a/f.js' },
     { kind: 'append', path: '中文 文件.txt', content: '二\n' },
-    { kind: 'append', path: 'star*file.txt', content: 'xx\n' },
     { kind: 'append', path: 'starXfile.txt', content: 'xx\n' },
     { kind: 'append', path: 'dir with space/file name.txt', content: 'yy\n' },
-  ], { name: 'paths', protected: ['中文 文件.txt', 'star*file.txt', 'dir with space/'] });
+  ];
+  if (canUseStar) steps.splice(3, 0, { kind: 'append', path: 'star*file.txt', content: 'xx\n' });
+
+  const { summary } = await runTask(ctx, steps, { name: 'paths', protected: ['中文 文件.txt', 'star*file.txt', 'dir with space/'] });
 
   const rename = summary.changes.files.find((item) => item.change === 'R');
   assert.deepEqual(rename, { path: 'src/b/f.js', change: 'R', from: 'src/a/f.js', added: 1, deleted: 1 });
@@ -178,8 +186,10 @@ test('中文路径、跨目录改名、带空格的路径和受保护路径里�
   const protectedViolations = summary.violations.filter((item) => item.kind === 'protected_path');
   const chineseViolation = protectedViolations.find((item) => item.path === '中文 文件.txt');
   assert.equal(chineseViolation.detail, '改动了 中文 文件.txt');
-  const starViolation = protectedViolations.find((item) => item.path === 'star*file.txt');
-  assert.match(starViolation.detail, /star\*file\.txt/);
+  if (canUseStar) {
+    const starViolation = protectedViolations.find((item) => item.path === 'star*file.txt');
+    assert.match(starViolation.detail, /star\*file\.txt/);
+  }
   assert.equal(protectedViolations.some((item) => item.path === 'starXfile.txt'), false, '受保护路径里的 * 不能按通配符匹配');
   assert.ok(summary.changes.files.some((item) => item.path === 'starXfile.txt' && item.change === 'M'));
 });

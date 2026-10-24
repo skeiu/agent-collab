@@ -2,7 +2,7 @@
 
 # 接口契约
 
-> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。2026-10-24 按 S3 验收的决定修改 §3 的 `attach`（本轮已结束时带回 `result`）、§5.5 的 `worker_lost`、§6 的 `run cancel`（可取消停下的任务）和 `run wait` 的接上说明【已确认】用户 2026-10-24。2026-10-24 按 S3 实现回填 §4、§5.2、§5.3、§5.5、§5.6、§6，用户审阅 diff 后原样通过【已确认】用户 2026-10-24。
+> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。2026-10-24 按 S3 验收的决定修改 §3 的 `attach`（本轮已结束时带回 `result`）、§5.5 的 `worker_lost`、§6 的 `run cancel`（可取消停下的任务）和 `run wait` 的接上说明【已确认】用户 2026-10-24。2026-10-24 按 S3 实现回填 §4、§5.2、§5.3、§5.5、§5.6、§6，用户审阅 diff 后原样通过【已确认】用户 2026-10-24。2026-10-24 按 S3 推送后 CI 暴露的缺陷修改 §5.3 的 `summary.json`、§5.5 的 `lastActivityAt` 和工作进程何时调用 `start`，用户审阅后通过【已确认】用户 2026-10-24。2026-10-24 按 S3 CI 修复的验收补充 §5.3 收尾后到达的事件、§5.5 `lastActivityAt` 的重置时机和不做卡死检查的时段、§6 `run wait` 返回前等待的对象，用户审阅后通过【已确认】用户 2026-10-24。
 
 ## 通用约定
 
@@ -245,7 +245,7 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 | `report-<n>.json` | 工作进程 | 第 n 轮提取出的汇报；提取失败时为 `{ v, error: { kind, message } }` |
 | `patch-<n>.diff` | 工作进程 | 第 n 轮结束时工作区相对基线的补丁（含新建的未跟踪文件）；`run cancel` 按 pid 结束工作进程时，这一轮不写 |
 | `events.jsonl` | 工作进程 | 第 4 节 |
-| `summary.json` | 工作进程 | 见 5.6 |
+| `summary.json` | 工作进程 | 见 5.6；工作进程先写好 `summary.json`，再把终态写进 `state.json`，所以读到终态时它一定已经存在。工作进程开始收尾后到达的执行端事件只记进 `worker.log`，不再写 `events.jsonl` 和 `state.json` |
 | `cancel.request` | `run cancel` | 存在即表示要求取消，内容 `{ v, at }`；工作进程定期检查。用文件而不是信号，各平台通用 |
 | `worker.log` | 工作进程 | 纯文本日志 |
 
@@ -270,7 +270,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 | `worker` | `{ pid, startedAt }`，没有工作进程时为 `null` |
 | `cursor` | 最后一个统一事件的 `cursor`，没有时为 `null` |
 | `lastEventN` | `events.jsonl` 里最后一个 `n` |
-| `lastActivityAt` | 最后一次收到执行端事件的时间，卡死检测用 |
+| `lastActivityAt` | 最后一次收到执行端事件的时间；工作进程发出一轮消息（`start`、`resume`、重发汇报）之前和适配器返回之后、接上会话之后也重置为当时。卡死检测用；工作进程第一次 `start`、`resume` 或 `attach` 完成之前，以及一轮结束后计算补丁、写汇报期间，不做卡死检查 |
 | `waiting` | `{ approvals: [approvalId], questions: [callId] }`；任一不空时不计卡死时间 |
 | `protectedPaths` | 本任务的受保护路径（相对仓库根目录；以 `/` 结尾表示目录；按字面匹配，不是通配符） |
 | `turnKinds` | `{ "<n>": kind }`，每一轮的 `kind`，`summary.turns[].kind` 取自这里 |
@@ -284,6 +284,8 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 - **进行中**：`starting`、`running`、`waiting_approval`、`waiting_question`。
 - **停下**（本轮结束，等设计端处理）：`done`、`partial`、`blocked`（取自汇报的 `status`）、`report_invalid`、`stalled`、`stopped_by_human`、`failed`。设计端可以对这些状态 `run resume`。
 - **结束**：`cancelled`。不能再 `resume`。
+
+工作进程只在任务为 `starting`、还没有 `sessionId` 时调用适配器的 `start`。任务已经进行中却找不到 `sessionId`（`state.json` 里没有，`events.jsonl` 里也没有 `session` 事件）时记为 `failed`（`worker_lost`），不再新开会话，避免同一任务出现两个执行端会话。
 
 `failed` 的 `statusReason` 常见值：`worker_lost`（工作进程不在了，`attach` 失败，或接上时这一轮已结束但没有 `result`）、`executor_error`、`transport_unavailable`。
 
@@ -317,7 +319,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 | 命令 | 参数 | 成功时的输出 |
 |---|---|---|
 | `run start` | `--brief <文件>`、`--title <任务名>`、`--designer <名称>`（可选，skill 按设计端渲染时写死，如 `claude`；用来选默认执行端和记录 `designer`）、`--designer-model <模型>`（可选）、`--executor <名称>`（可选；没有它也没有 `--designer` 时报用法错误）、`--protected <路径>`（可重复，与配置里的 `protectedPaths` 合并）、`--image <文件>`（可重复）、`--set <键>=<JSON 值>`（可重复，单个任务级配置；键可以是点号路径，如 `executors.dsh.model`；值不是合法 JSON 时按字符串） | `{ ok, runId, runDir, status: "starting", workerPid }`，立即返回 |
-| `run wait <任务号>` | `--timeout <秒>`（可选） | 任务进入“停下”或“结束”状态、工作进程退出后（最多再等 3 秒）返回 `{ ok, runId, status, statusReason, summaryFile, patchFile, reportFile }`，`patchFile`、`reportFile` 指最后一轮的文件，不存在时为 `null`；超时返回 `{ ok, runId, status, timedOut: true }`，退出码 0 |
+| `run wait <任务号>` | `--timeout <秒>`（可选） | 任务进入“停下”或“结束”状态后，等工作进程退出（包括这次 `run wait` 自己启动的那个）、本任务的仓库锁释放（各最多再等 3 秒）再返回 `{ ok, runId, status, statusReason, summaryFile, patchFile, reportFile }`，`patchFile`、`reportFile` 指最后一轮的文件，不存在时为 `null`；超时返回 `{ ok, runId, status, timedOut: true }`，退出码 0 |
 | `run status [任务号]` | `--all`（所有仓库） | 有任务号：`{ ok, run: <state.json>, workerAlive }`；没有：`{ ok, runs: [{ runId, repoRoot, status, turn, updatedAt, workerAlive }] }`，只列未“结束”的任务；不带 `--all` 且当前目录不是 git 仓库时 `runs` 为空 |
 | `run resume <任务号>` | `--message <文件>`、`--kind correction \| answer` | `{ ok, runId, turn, status: "starting", workerPid }` |
 | `run cancel <任务号>` | — | 进行中的任务：工作进程确认后返回 `{ ok, runId, status: "cancelled" }`；10 秒内没确认就结束该工作进程（按 `state.json` 里的 pid），状态记为 `cancelled`，`statusReason` 注明。停下的任务（含等待确认期间自己停下的）：不结束任何进程，直接记为 `cancelled`，`statusReason` 写明取消前的状态，`state.json` 和 `summary.json` 只改 `status`、`statusReason`、`endedAt`（`summary.json` 还没写出时，先按事件和基线补一份）。已是 `cancelled` 的直接返回成功 |

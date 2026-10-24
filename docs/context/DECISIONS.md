@@ -24,6 +24,8 @@
 | 项目级配置只能收紧 4 个安全相关项（决定 7 的补充） | PLAN.md §12.2：`protectedPaths` 取并集，`confirmBeforeDispatch` 取较严，`freshReviewForRisky` 只认 `true`，`commitOnAccept` 只认 `false`；S1 验收审读代码时发现项目文件能清空保护路径、关掉派发前确认 | 【已确认】确认人：用户，2026-10-23 | 被否决的替代方案见下节 |
 | S3 验收：`attach` 带回已结束一轮的结果、可取消停下的任务 | protocol.md §3、§5.5、§6 和 PLAN.md §11.3：工作进程不在期间执行端跑完的一轮，`attach` 以 `running: false` 加 `result` 带回，运行时照正常的一轮结束处理；`run cancel` 对停下的任务直接记为 `cancelled`，只改状态字段 | 【已确认】确认人：用户，2026-10-24 | 被否决的替代方案见下节；返工任务书 [briefs/1a-s3-rework.md](briefs/1a-s3-rework.md) 第 8、9 条 |
 | S3 实现回填 | protocol.md §4、§5.2、§5.3、§5.5、§5.6、§6 和通用约定按 S3 实现修改：`session` 事件由运行时写、`turn_end` 由运行时在适配器没发时补写；仓库锁改为临时文件加 `link`、打破旧锁用互斥文件；`state.json` 增加 `turnKinds`、`title`、`images`、`taskConfig`；补齐拒绝表之外的 `error.code`；`run wait` 等工作进程退出再返回。PLAN.md §7.1 补 5 个运行时辅助模块和 `atomic-write.js`，§11.3 改为由工作进程写事件；dev-setup.md 写测试用的环境变量 | 【已确认】确认人：用户，2026-10-24（审阅 diff 后原样通过） | [1a-impl-plan.md](1a-impl-plan.md)“进展” |
+| S3 CI 缺陷修复的契约修改 | protocol.md §5.3：工作进程先写 `summary.json` 再写终态；§5.5：`lastActivityAt` 在发出一轮消息和接上会话时重置；工作进程只在 `starting` 且没有 `sessionId` 时调用 `start`，进行中却找不到 `sessionId` 记为 `failed`（`worker_lost`），不再新开会话 | 【已确认】确认人：用户，2026-10-24 | 修复任务书 [briefs/1a-s3-ci-fix.md](briefs/1a-s3-ci-fix.md) |
+| S3 CI 修复验收后的契约补充 | protocol.md §5.3：开始收尾后到达的执行端事件只记进 `worker.log`，不写 `events.jsonl` 和 `state.json`；§5.5：`lastActivityAt` 在适配器返回后也重置，第一次 `start`/`resume`/`attach` 完成前和一轮收尾计算期间不做卡死检查；§6：`run wait` 返回前也等它自己启动的工作进程和本任务的仓库锁释放 | 【已确认】确认人：用户，2026-10-24 | 返工任务书 [briefs/1a-s3-ci-rework.md](briefs/1a-s3-ci-rework.md) |
 
 ## 被否决的替代方案
 
@@ -39,6 +41,7 @@
 | 所有配置项都允许项目级覆盖 | 权限和执行环境类的项不允许出现在 `.agent-collab.json` | 项目文件随仓库来，可能不可信 | 用户，2026-10-23（1a 实现决定 7） |
 | 这 4 项和决定 7 的项一样，完全不允许项目级设置 | 项目级只能收紧 | 仓库仍能声明自己的保护路径、要求更严的确认；放宽的路被堵住 | 用户，2026-10-23 |
 | `attach` 时本轮已结束就记 `failed`（S3 的实现） | 带回 `result` 并照常结束这一轮 | 工作进程掉线而执行端继续跑完正是 T23 的情形，记 `failed` 会丢掉这一轮的汇报 | 用户，2026-10-24 |
+| 先收窄成自用最小版：只做 Linux 和 dsh 执行端，不做安装同步、配置页、看板，不做其他执行端和设计端，“关掉会话后接上”降为只能查状态和取消（Claude 2026-10-24 提出，估计 1–2 天可用） | 范围不变，按 PLAN.md 继续做（完整版估计还要 12–20 个有效工作日） | 用户决定保持 PLAN.md §1 的全部硬性要求 | 用户，2026-10-24 |
 | `run cancel` 只能取消进行中的任务，停下的以 `not_running` 拒绝（S3 的实现） | 停下的任务也可取消，直接记为 `cancelled` | 否则停下的任务无法“结束”，会一直出现在 `run status` 的列表里 | 用户，2026-10-24 |
 
 ## 项目决策（PLAN.md 之外）
@@ -51,6 +54,8 @@
 | §17 第 15 项提前做，先做 Windows 桌面版探针：dsh 在 Linux 上写探针并空跑，Windows 上由那台机器的 Claude Code 会话按 README 执行（看侧栏这类界面操作由用户做），这边的 Claude 对照结果文件验收；测试插件允许装进 Windows 上真实的 `desktop` profile，装前备份、做完卸载并核对恢复 | 用户说明那台机器的 dsh 没有任何数据；装插件时桌面版必须完全退出，不能由桌面版里的 dsh 自己跑探针，所以改由 Windows 上的 Claude Code 执行。这边的 Claude 无法在 Windows 上重跑，验收依据是结果文件、截图和用户的回答 | 【已确认】确认人：用户，2026-10-23 |
 | 1a 测试方式：桥接和端到端测试优先用本地假 LLM 服务（1a 实现决定 4） | 第 2 批当时否决过假模型服务，那是针对“验证真实模型会不会调用审批和提问”；1a 实现的测试目标是桥接和运行时的行为，用脚本更可控 | 【已确认】确认人：用户，2026-10-23 |
 | 1a 分工细化：skill 正文、任务书和问题单模板由 Claude 起草，`render-skill.mjs` 和构建由 dsh 写（1a 实现决定 5）；`core/` 可加辅助模块（决定 6） | skill 是写给设计端看的流程说明 | 【已确认】确认人：用户，2026-10-23 |
+| Claude 在 Claude 桌面版的内置浏览器里操作 dsh Web，自己派发定稿的任务书并读汇报；边界见 [RUNBOOK.md](RUNBOOK.md)“Claude 在内置浏览器里派发” | 省去用户粘贴任务书和转述汇报；登录由用户完成，审批只拒不批，验收结论和提交授权仍归用户。被否决的替代方案：继续由用户派发 | 【已确认】确认人：用户，2026-10-24 |
+| 测试稳定性的常规验收：`npm test` 本机连跑多次加 CI 三平台通过；满 CPU 的重负载压力测试只作 S3 CI 返工（[briefs/1a-s3-ci-rework.md](briefs/1a-s3-ci-rework.md) CR6）的一次性验收，之后只在怀疑有时序问题时（例如 CI 偶发失败、审阅发现竞态）才跑 | 每轮验收可省 20–40 分钟；时序问题主要靠代码审阅和副本里的反证来抓。被否决的替代方案：每步都跑重负载 | 【已确认】确认人：用户，2026-10-24 |
 | 接口契约 [docs/protocol.md](../protocol.md)（S0）原样通过；它和 PLAN.md §8 表格的三处出入按契约回填 PLAN.md | 字段以 protocol.md 为准（1a 实现决定 3）。审阅之后 Claude 又补了 `run start` 的 `--designer`、`--designer-model`（原契约没有办法告诉运行时设计端是谁），用户同日同意 | 【已确认】确认人：用户，2026-10-23 |
 
 本次建立的文档结构是 AI 采用的方案，尚未经用户确认，不列为决策（见 [NOW.md](NOW.md)“阻塞与待核实”）。

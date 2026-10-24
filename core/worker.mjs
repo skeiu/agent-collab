@@ -92,6 +92,10 @@ export async function runWorker({ runDir }) {
   let cancelRequested = false;
   let cancelSent = false;
   let stalled = false;
+  // 首次 start / resume / attach 还没完成时不做卡死检查：这时状态的 lastActivityAt 还是上一次的值。
+  let readyForStallCheck = false;
+  // 一轮结束后工作进程要算补丁、写汇报：这段时间没在等执行端，不能算空闲。
+  let finishingTurn = false;
   // 工作进程重启时以 events.jsonl 为准：这一轮如果已经写过 turn_end，就不再补一条。
   let currentTurnEndSeen = evlog.events.some((event) => event.type === 'turn_end' && Number(event.turn) === Number(state.turn));
   let lastChanges = null;
@@ -175,6 +179,9 @@ export async function runWorker({ runDir }) {
       const order = compareCursor(raw.cursor, evlog.lastCursor);
       if (order !== null && order <= 0) return;
     }
+    // 收到事件就先记活跃时间：下面的 appendFile 有 await，卡死检查可能在这个空档里跑，
+    // 而等待列表此时可能已经被清空（例如 approval resolved），会被误判成空闲超时。
+    state.lastActivityAt = nowIso();
     const before = waitingCount();
     const waiting = state.waiting ?? (state.waiting = { approvals: [], questions: [] });
     if (raw.type === 'approval') {
@@ -208,6 +215,12 @@ export async function runWorker({ runDir }) {
   }
 
   function onAdapterEvent(raw) {
+    // protocol.md 5.3：收尾开始后到达的执行端事件只记进 worker.log，不再写 events.jsonl 和 state.json。
+    // 否则这些事件里的 saveState() 会把终态提前落盘，绕过“先写 summary.json、最后写终态”的顺序保证。
+    if (finalized) {
+      log('收尾已开始，收到事件（' + (raw && typeof raw.type === 'string' ? raw.type : '未知') + '），不写入 events.jsonl 和 state.json');
+      return;
+    }
     enqueue(() => handleAdapterEvent(raw));
   }
 
@@ -226,6 +239,8 @@ export async function runWorker({ runDir }) {
 
   function startTimers(idleTimeoutMs, stallPollMs, cancelPollMs) {
     timers.push(setInterval(() => {
+      if (!readyForStallCheck) return;
+      if (finishingTurn) return;
       if (!isRunningStatus(state.status)) return;
       if (state.status === 'starting') return;
       if (waitingCount() > 0) return;
@@ -305,6 +320,8 @@ export async function runWorker({ runDir }) {
   /** 一轮结束：写补丁和汇报文件，按优先级决定状态；需要重发时返回新的 turn。 */
   async function finishTurn(result) {
     const turn = state.turn;
+    // 收尾期间的 git 快照和差分可能要几百毫秒（慢机器上更久），不能算成执行端空闲。
+    finishingTurn = true;
     await queue;
     const stoppedBy = result && result.stoppedBy ? result.stoppedBy : null;
     if (!currentTurnEndSeen) {
@@ -348,6 +365,10 @@ export async function runWorker({ runDir }) {
       await setStatus('running', '要求重发汇报');
       currentTurnEndSeen = false;
       const resumed = await adapter.resume({ sessionId: state.executor.sessionId, message });
+      // 和其他路径一致（protocol.md 5.5）：适配器返回之后也重置空闲计时，并立刻落盘。
+      state.lastActivityAt = nowIso();
+      finishingTurn = false;
+      await saveState();
       return resumed && resumed.turn ? resumed.turn : null;
     }
     await finalize('report_invalid', extracted.error.message);
@@ -360,10 +381,22 @@ export async function runWorker({ runDir }) {
     for (const timer of timers) clearInterval(timer);
     await queue;
     const endedAt = nowIso();
-    await setStatus(status, reason);
+    const from = state.status;
+    state.status = status;
+    state.statusReason = reason ?? null;
     state.endedAt = endedAt;
     state.worker = null;
-    await saveState({ final: true });
+    if (from !== status) {
+      await appendEvent({ type: 'status', from, to: status, reason: reason ?? null });
+    }
+    // 测试用：把 summary.json 的写出拖后，模拟“终态已经可见、summary 还没写完”的窗口。
+    const summaryDelayMs = envNumber(env, 'AGENT_COLLAB_TEST_SUMMARY_DELAY_MS', 0);
+    if (summaryDelayMs > 0) {
+      log('测试：summary.json 写出前暂停 ' + summaryDelayMs + ' 毫秒');
+      await new Promise((resolve) => setTimeout(resolve, summaryDelayMs));
+    }
+    // 顺序按 protocol.md 5.3：先写 summary.json，最后才把终态写进 state.json。
+    // 这样读到终态的调用方一定能读到 summary.json。
     const summary = await buildSummary({
       runDir,
       events: evlog.events,
@@ -373,6 +406,13 @@ export async function runWorker({ runDir }) {
       endedAt,
     });
     await writeJson(path.join(runDir, 'summary.json'), summary);
+    await saveState({ final: true });
+    // 测试用：终态已经写盘、锁还没释放的窗口，用来验证 run wait 返回时工作进程确实已经退出、锁已经释放。
+    const beforeReleaseMs = envNumber(env, 'AGENT_COLLAB_TEST_PAUSE_BEFORE_RELEASE_MS', 0);
+    if (beforeReleaseMs > 0) {
+      log('测试：释放锁之前暂停 ' + beforeReleaseMs + ' 毫秒');
+      await new Promise((resolve) => setTimeout(resolve, beforeReleaseMs));
+    }
     await releaseLock(lockFile, state.runId);
     log('任务结束：' + status + (reason ? '（' + reason + '）' : ''));
     if (adapter) {
@@ -382,6 +422,15 @@ export async function runWorker({ runDir }) {
         log('关闭适配器失败：' + (error && error.message ? error.message : String(error)));
       }
     }
+  }
+
+  /** 从 events.jsonl 里找最后一条 session 事件（工作进程可能在写 state.json 之前就退出）。 */
+  function lastSessionEvent() {
+    for (let index = evlog.events.length - 1; index >= 0; index -= 1) {
+      const event = evlog.events[index];
+      if (event.type === 'session' && typeof event.sessionId === 'string' && event.sessionId !== '') return event;
+    }
+    return null;
   }
 
   async function drive() {
@@ -406,9 +455,36 @@ export async function runWorker({ runDir }) {
     log('工作进程启动，pid ' + process.pid + '，任务 ' + state.runId + '，状态 ' + state.status);
     startTimers(idleTimeoutMs, stallPollMs, cancelPollMs);
 
+    // state.json 里没有 sessionId 时，从 events.jsonl 最后一条 session 事件恢复：
+    // 工作进程可能在写 state.json 之前就退出，这时会话其实已经建好，不能再开第二个（protocol.md 5.5）。
+    if (!state.executor) state.executor = { name: executorName, sessionId: null };
+    if (!state.executor.sessionId) {
+      const session = lastSessionEvent();
+      if (session) {
+        log('从 events.jsonl 恢复 sessionId：' + String(session.sessionId));
+        state.executor = {
+          ...state.executor,
+          sessionId: session.sessionId,
+          transport: session.transport ?? state.executor.transport ?? null,
+          model: session.model ?? state.executor.model ?? null,
+          agentPreset: session.agentPreset ?? state.executor.agentPreset ?? null,
+        };
+        await saveState();
+      }
+    }
+
     let turnPromise = null;
     if (!state.executor.sessionId) {
+      // 只有 run start 留下的 starting 状态才新开会话；任务已经进行中却找不到 sessionId，说明会话丢了，
+      // 再开一个会让同一个任务出现两个执行端会话，记为 failed（worker_lost）。
+      if (state.status !== 'starting') {
+        log('任务状态为 ' + state.status + ' 但哪里都找不到 sessionId，记为 failed（worker_lost）');
+        await finalize('failed', 'worker_lost');
+        return;
+      }
       const brief = await fsp.readFile(path.join(runDir, 'brief.md'), 'utf8');
+      // 发消息之前重置空闲计时（protocol.md 5.5）。
+      state.lastActivityAt = nowIso();
       await setStatus('running', '启动执行端');
       const started = await adapter.start({
         cwd: state.repoRoot,
@@ -419,6 +495,12 @@ export async function runWorker({ runDir }) {
         options,
         env: adapterEnv,
       });
+      const pauseAfterStartMs = envNumber(env, 'AGENT_COLLAB_TEST_PAUSE_AFTER_START_MS', 0);
+      if (pauseAfterStartMs > 0) {
+        // 测试用：模拟“会话已建、sessionId 还没写进 state.json”的窗口。
+        log('测试：start 返回后暂停 ' + pauseAfterStartMs + ' 毫秒');
+        await new Promise((resolve) => setTimeout(resolve, pauseAfterStartMs));
+      }
       state.executor = {
         ...state.executor,
         sessionId: started?.sessionId ?? null,
@@ -426,6 +508,8 @@ export async function runWorker({ runDir }) {
         model: started?.model ?? null,
         agentPreset: state.executor?.agentPreset ?? options.agentPreset ?? null,
       };
+      // 先把 sessionId 写进 state.json，再处理排队的事件和写 session 事件，尽量缩短这个窗口。
+      await saveState();
       await queue;
       // 适配器自己发了 session 事件就不再补，避免同一件事写两条。
       const sessionSeen = evlog.events.some((event) => event.type === 'session' && event.turn === state.turn);
@@ -440,13 +524,21 @@ export async function runWorker({ runDir }) {
           permission: options.permissionPreset ?? null,
         });
       }
+      state.lastActivityAt = nowIso();
+      readyForStallCheck = true;
       await saveState();
       turnPromise = started?.turn ?? null;
     } else if (state.status === 'starting') {
       const promptFile = path.join(runDir, 'prompt-' + state.turn + '.md');
       const message = await fsp.readFile(promptFile, 'utf8');
+      // 发消息之前重置空闲计时（protocol.md 5.5）。
+      state.lastActivityAt = nowIso();
       await setStatus('running', '续接第 ' + state.turn + ' 轮');
       const resumed = await adapter.resume({ sessionId: state.executor.sessionId, message });
+      // 适配器自己花的这段时间不算空闲。
+      state.lastActivityAt = nowIso();
+      readyForStallCheck = true;
+      await saveState();
       turnPromise = resumed?.turn ?? null;
     } else if (isRunningStatus(state.status)) {
       const attached = await adapter.attach({ sessionId: state.executor.sessionId, sinceCursor: state.cursor });
@@ -454,6 +546,10 @@ export async function runWorker({ runDir }) {
         await finalize('failed', 'worker_lost');
         return;
       }
+      // 接上之后重置空闲计时：接下来可能还要过一会儿才有事件（protocol.md 5.5）。
+      state.lastActivityAt = nowIso();
+      readyForStallCheck = true;
+      await saveState();
       if (attached.running === true && attached.turn) {
         await setStatus('running', '工作进程重新接上');
         turnPromise = attached.turn;

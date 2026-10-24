@@ -8,10 +8,12 @@ import { test } from 'node:test';
 import {
   createContext,
   makeReport,
+  pidAlive,
   readJson,
   runCli,
   startFakeExecutor,
   turnWithReport,
+  waitFor,
 } from './helpers/run-harness.mjs';
 
 async function brief(ctx, name) {
@@ -97,12 +99,21 @@ test('本仓库别的任务在跑时 run resume 以 lock_held 拒绝', async (t)
   const ctx = await createContext('resume-held');
   t.after(() => ctx.cleanup());
   const executor = await startFakeExecutor(ctx, {
-    turns: [
-      turnWithReport(makeReport({ status: 'partial' })),
-      turnWithReport(makeReport(), { steps: [{ kind: 'sleep', ms: 2500 }] }),
-    ],
+    turns: [turnWithReport(makeReport({ status: 'partial' }))],
   });
   t.after(() => executor.stop());
+  // 第二个任务用单独一个假执行端，并且这一轮会挂住：两个任务共用一个假执行端时，第二个任务跑的是
+  // turns[0]（立即结束），负载一重就会在 run resume 之前结束、放掉锁，用例变成“没人在跑”也照样通过。
+  const holder = await startFakeExecutor(ctx, {
+    turns: [{
+      steps: [
+        { kind: 'event', event: { type: 'text', text: '慢慢做' } },
+        { kind: 'sleep', ms: 8000 },
+      ],
+      end: { stopReason: 'end_turn', endReason: null, stoppedBy: null, finalText: '' },
+    }],
+  }, { name: 'holder' });
+  t.after(() => holder.stop());
 
   const first = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'held-1'), '--executor', 'fake'], { executor });
   assert.equal(first.code, 0, first.stdout);
@@ -110,8 +121,17 @@ test('本仓库别的任务在跑时 run resume 以 lock_held 拒绝', async (t)
   assert.equal(firstWait.json.status, 'partial');
 
   // 另一个任务占着本仓库的锁。
-  const second = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'held-2'), '--executor', 'fake'], { executor });
+  const second = await runCli(ctx, ['run', 'start', '--brief', await brief(ctx, 'held-2'), '--executor', 'fake'], { executor: holder });
   assert.equal(second.code, 0, second.stdout);
+
+  // 前置条件：第二个任务确实在跑、工作进程活着、锁是它的。不满足时直接失败，而不是悄悄变成别的场景。
+  const secondState = await waitFor(async () => {
+    const state = await readJson(path.join(second.json.runDir, 'state.json')).catch(() => null);
+    return state && state.status === 'running' && state.worker && pidAlive(state.worker.pid) ? state : null;
+  }, { label: '第二个任务进入 running' });
+  assert.ok(pidAlive(secondState.worker.pid), '第二个任务的工作进程应还活着');
+  const lockFile = path.join(path.dirname(first.json.runDir), 'active.lock');
+  assert.equal((await readJson(lockFile)).runId, second.json.runId, '锁应在第二个任务手里');
 
   const messageFile = path.join(ctx.root, 'correction.md');
   await fsp.writeFile(messageFile, '接着改\n');
@@ -120,7 +140,10 @@ test('本仓库别的任务在跑时 run resume 以 lock_held 拒绝', async (t)
   assert.equal(resumed.json.error.code, 'lock_held');
   assert.equal(resumed.json.error.data.runId, second.json.runId);
 
-  await runCli(ctx, ['run', 'cancel', second.json.runId], { executor });
+  // 收掉第二个任务：它一直在跑，取消后应记为 cancelled。
+  const cancelled = await runCli(ctx, ['run', 'cancel', second.json.runId], { executor: holder });
+  assert.equal(cancelled.code, 0, cancelled.stdout);
+  assert.equal(cancelled.json.status, 'cancelled');
 });
 
 test('run resume 重新拿锁，期间其他 run start 被锁住', async (t) => {
@@ -129,7 +152,8 @@ test('run resume 重新拿锁，期间其他 run start 被锁住', async (t) => 
   const executor = await startFakeExecutor(ctx, {
     turns: [
       turnWithReport(makeReport({ status: 'partial' })),
-      turnWithReport(makeReport({ status: 'done' }), { steps: [{ kind: 'sleep', ms: 1500 }] }),
+      // 第 2 轮留出 3 秒：负载重时 run start 撞锁之前这一轮也还在跑。
+      turnWithReport(makeReport({ status: 'done' }), { steps: [{ kind: 'sleep', ms: 3000 }] }),
     ],
   });
   t.after(() => executor.stop());

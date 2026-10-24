@@ -28,15 +28,21 @@ node --test --test-timeout=60000
 | `AGENT_COLLAB_TEST_ADAPTER` | 适配器模块的绝对路径，代替按执行端名查找 `core/adapters/<name>.mjs` |
 | `AGENT_COLLAB_TEST_IDLE_TIMEOUT_MS` | 卡死阈值（`idleTimeoutMinutes` × 60000） |
 | `AGENT_COLLAB_TEST_STALL_POLL_MS` | 工作进程检查卡死的间隔（5000） |
-| `AGENT_COLLAB_TEST_CANCEL_POLL_MS` | 工作进程检查 `cancel.request` 的间隔（500）；`run cancel` 轮询状态的间隔也用它（100） |
+| `AGENT_COLLAB_TEST_CANCEL_POLL_MS` | 工作进程检查 `cancel.request` 的间隔（500） |
+| `AGENT_COLLAB_TEST_CANCEL_WAIT_POLL_MS` | `run cancel` 自己轮询状态的间隔（100）；和上一项分开，测试可以只冻结其中一边 |
 | `AGENT_COLLAB_TEST_CANCEL_TIMEOUT_MS` | `run cancel` 等工作进程确认的时长（10000） |
 | `AGENT_COLLAB_TEST_KILL_GRACE_MS` | `run cancel` 发 SIGTERM 后等多久再发 SIGKILL（2000） |
 | `AGENT_COLLAB_TEST_WAIT_POLL_MS` | `run wait` 轮询状态的间隔（200） |
 | `AGENT_COLLAB_TEST_ATTACH_GRACE_MS` | `run wait` 两次启动新工作进程的最小间隔（1500） |
 | `AGENT_COLLAB_TEST_WATCH_POLL_MS` | `watch` 轮询事件的间隔（100） |
 | `AGENT_COLLAB_TEST_STATE_WRITE_FAIL_ONCE` | 设为 `1` 时让工作进程第一次写 `state.json` 失败，测试写入失败不退出 |
+| `AGENT_COLLAB_TEST_PAUSE_AFTER_START_MS` | 工作进程 `start` 返回后、写 `sessionId` 之前暂停的毫秒数（0），露出“会话已建、`sessionId` 还没落盘”的窗口 |
+| `AGENT_COLLAB_TEST_SUMMARY_DELAY_MS` | 收尾时写 `summary.json` 之前暂停的毫秒数（0） |
+| `AGENT_COLLAB_TEST_PAUSE_BEFORE_RELEASE_MS` | 收尾时终态写盘之后、释放仓库锁之前暂停的毫秒数（0） |
 
-`AGENT_COLLAB_FAKE_EXECUTOR`（假执行端的 `host:port`）只由测试传给假适配器，运行时不读它。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。【已验证】2026-10-24，Linux、Node 22：`node --test` 连跑 12 次 137/137，跑完无残留进程。
+`AGENT_COLLAB_FAKE_EXECUTOR`（假执行端的 `host:port`）只由测试传给假适配器，运行时不读它。
+
+假执行端的脚本（JSON）除了按轮次列出步骤，还支持：步骤 `{ "kind": "wait_for_attach", "ms"? }`（停在这一轮里，直到这一轮收到过一次 `attach`，用来保证“接上时这一轮还在进行中”）；顶层开关 `afterTurnEnd: { triggerFile | ms, event, timeoutMs? }`（一轮结束后等触发文件出现或固定毫秒，再补发一条事件）和 `emitSessionOnStart`（`start` 期间自己发 `session` 事件）。一轮结束时，若脚本的 `end.finalText` 不能从这一轮的 text 事件按 [protocol.md](protocol.md) §3 的规则算出，假执行端会补一条 text 事件，使 `turn_end` 消息和补发的事件给出同一份最终文字。传了 `--record <文件>` 时，另外写 `<文件>.starts.jsonl`、`<文件>.attaches.jsonl`（每次 `attach` 时这一轮是否在跑）和 `<文件>.commands.jsonl`（收到的命令）。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。【已验证】2026-10-24，Linux、Node 22：`npm test` 连跑 10 次 146/146，跑完无残留进程。
 
 ## 集成测试
 

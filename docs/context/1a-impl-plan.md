@@ -40,7 +40,7 @@
 
 ## 各步验收标准
 
-所有步骤共同要求：`npm test` 在本机和 CI 三平台通过（CI 要推送，须用户授权）；不需要 `npm install`；不写死路径和端口；新文件开头有一行职责说明；提交前按 RUNBOOK 扫描本机信息。下面只列各步自己的标准，详细的 AC 写在各步任务书里。
+所有步骤共同要求：`npm test` 在本机和 CI 三平台通过（CI 要推送，须用户授权）；重负载压力测试不作常规要求（见 [DECISIONS.md](DECISIONS.md)“项目决策”）；不需要 `npm install`；不写死路径和端口；新文件开头有一行职责说明；提交前按 RUNBOOK 扫描本机信息。下面只列各步自己的标准，详细的 AC 写在各步任务书里。
 
 - **S0**：契约覆盖 S2、S3 之间传递的每一个字段和每一种事件；PLAN.md §9.2、§9.3、§11.3、§8“运行目录和任务状态”里出现的字段都能在契约里找到；用户审阅通过。
 - **S1**：见任务书 AC1–AC9；返工见 [briefs/1a-s1-rework.md](briefs/1a-s1-rework.md) RW1–RW7。
@@ -101,3 +101,33 @@
   - 审读：锁改为临时文件加 `fsp.link`，打破旧锁用互斥文件并重读确认，互斥文件超过 5 秒可清；`run cancel` 分进行中、等待期间自己停下、停下三条路径；`attach` 带回 `result` 时按正常一轮结束处理。
   - 待回填（下一步起草给用户审阅）：protocol.md §5.2 锁的写法和 `lock_held` 的 `data` 多 `pid`、§5.5 `state.json` 多出的 `turnKinds`/`title`/`images`/`taskConfig`、`session` 事件由运行时写、拒绝表之外的 `error.code`、`run wait` 等工作进程退出再返回且文件取最后一轮、仓库外 `run status` 返回空列表、`turn_end` 两种来路、`--set` 的点号路径；按 PID 结束工作进程时没有补丁文件、`summary` 的改动由基线重算；对停下的任务取消时 `summary.json` 缺失就补一份（dsh 的疑问，Claude 认为可以接受）。PLAN.md §7.1 补 5 个辅助模块；dev-setup.md 写 `AGENT_COLLAB_TEST_` 变量。
 - 2026-10-24 S3 回填（protocol.md 通用约定、§4、§5.2、§5.3、§5.5、§5.6、§6，PLAN.md §7.1、§11.3，dev-setup.md 的测试环境变量）用户审阅 diff 后原样通过【已确认】用户 2026-10-24，登记 DECISIONS.md；`run start` 重写 `state.json`、`watch` 重读整个事件文件两项记为 RISKS.md R9、R10。
+- 2026-10-24 经用户授权提交并推送 S3（`ba4c802`）。CI 运行 40065381813：ubuntu Node 20/LTS、macOS Node 20 通过；windows Node 20（日志 744 行）、windows LTS（195 行）、macOS LTS（184 行）在 `node --test` 步骤以退出码 1 失败，没有超时。【已验证】2026-10-24，GitHub API 查作业结论和注释；日志正文 API 返回 403，待用户提供。
+- 2026-10-24 S3 CI 失败分析（用户提供 macOS LTS 和 Windows Node 20 日志；Windows 日志中段被截，5 个失败里看到 3 个）。【已验证】2026-10-24，Claude 本机复现：
+  - RW8 事件 4 对 6：满 CPU 负载下跑诊断脚本 96 次失败 2 次，现场显示假执行端把同一轮跑了两遍、`worker.log` 有两次启动。原因是 `sessionId` 写进 `state.json` 之前工作进程被杀，新工作进程又调用 `start`，同一任务开出第二个执行端会话。
+  - “不带 result”用例 `summary.json` 不存在：`finalize` 先写终态再写 `summary.json`，`run wait` 没等它自己启动的新工作进程（读代码确认）。
+  - 续接后立即 `stalled`：阈值 1 秒、停下 2.5 秒后 `run resume`，执行端 300 ms 就有事件，仍记为 `stalled`；`lastActivityAt` 在 `start`、`resume`、`attach` 时都不重置。Windows 上“等待审批不算卡死”失败是同一原因。
+  - 测试问题：Windows 文件名不能含 `*`（`run-baseline` 第 153 行）；RW3 用例靠 900 ms 对 1200 ms 的时间差制造竞态。
+  - protocol.md §5.3（先写 `summary.json` 再写终态）、§5.5（`lastActivityAt` 在发出消息和接上时重置；只在 `starting` 且无 `sessionId` 时 `start`）已先改，待用户审阅；修复任务书 [briefs/1a-s3-ci-fix.md](briefs/1a-s3-ci-fix.md) 草稿。
+- 2026-10-24 protocol.md §5.3、§5.5 的修改用户审阅后通过【已确认】用户 2026-10-24，登记 DECISIONS.md；修复任务书定稿，待派发。
+- 2026-10-24 S3 CI 修复（[briefs/1a-s3-ci-fix.md](briefs/1a-s3-ci-fix.md)）验收，部分通过。【已验证】2026-10-24，Claude 重跑：
+  - 隔离：对照 `s3ci-baseline.txt`，文档哈希、profiles 未变，`~/.agent-collab` 不存在；dsh 会话先切 `workspace-write`、审批策略 `ask`，无越权审批，结束的都是自己 spawn 的进程。机器 2026-10-24 16:19 重启过，dsh Web 换了进程号（`cordis.yml` 随启动重写，内容是生成的空列表）。
+  - FX1：两个新用例通过；副本里撤回“只在 starting 时 start”和“从 session 事件恢复”后 3/3 失败。FX3：两个新用例通过。
+  - FX2 部分通过：用例通过，但副本里只撤回“summary 先写”、只撤回“`run wait` 等 pendingSpawnPid 和锁”各 3/3 仍通过——2 秒的 summary 延迟让新工作进程活过了 1.5 秒的轮询间隔，“一次轮询间隔内收尾”没出现，两处修复互相兜住。
+  - FX5：3 个文件各 8 份、3 轮，72/72 通过；`run-attach` 单独 24 份 × 4 轮 96/96 通过。`npm test` 6 次 142/142、约 15 秒，无残留。
+  - 更重负载（`nproc`=20 个占满 CPU 的进程，4 个文件各 16–24 份同时跑）：“杀掉再接上”的用例大量记成 `report_invalid`（96 个进程一轮失败 36–43 个）。留现场看：接上时这一轮已结束，假适配器按 §3 从补发事件算 `finalText` 只得到“最后一步”，汇报只在脚本的 `end.finalText` 里。副本里让假执行端补发 `end.finalText` 后这些失败消失。run-lock“run resume 以 lock_held 拒绝”偶发 `0 !== 3`：第二个任务跑的是立即结束的 `turns[0]`。
+  - 审阅：`finalize` 设终态到写 `summary.json` 之间若有事件到达，`handleAdapterEvent` 会先把终态写进 `state.json`；重发汇报的 `resume` 返回后没重置 `lastActivityAt`。
+  - dsh 提出的 3 处超出条文的实现：`lastActivityAt` 在适配器返回后也重置、收尾和首次接上前不查卡死，`run wait` 也等锁释放，接上后写一次 `state.json`；前两处起草进 protocol.md，第三处是实现细节不写。返工任务书 [briefs/1a-s3-ci-rework.md](briefs/1a-s3-ci-rework.md) 草稿。
+- 2026-10-24 protocol.md §5.3、§5.5、§6 的补充用户审阅后通过【已确认】用户 2026-10-24，登记 DECISIONS.md；返工任务书定稿，待派发。
+- 2026-10-24 S3 CI 返工（[briefs/1a-s3-ci-rework.md](briefs/1a-s3-ci-rework.md)）验收，部分通过：CR1–CR3、CR5–CR7 通过，CR4 部分通过。【已验证】2026-10-24，Claude 重跑：
+  - 隔离：对照 `s3cr-baseline.txt`，代码以外只有 Claude 自己改的 3 份文档变了；`~/.agent-collab` 不存在，dsh Web 进程号未变。`profiles/web/cordis.patch.yml` 在 17:39 变过：dsh 沙箱里 `/` 只读、只有仓库可写，改它的是 dsh Web 进程本身（时间对应用户在内置浏览器里打开带令牌的地址），不是任务。会话日志：开工前切到 `workspace-write`、审批策略 `ask`，没有审批请求；`docs/` 只读不写，`git commit` 只发生在临时仓库里，`kill` 只针对自己记下的 PID。
+  - CR1：副本里撤回“补一条 text 事件”（`turn_end` 照旧带脚本里的 `end.finalText`）后，新用例 CR1 失败，其余照过。CR2：副本里让 `wait_for_attach` 直接返回，并把 `ATTACH_GRACE` 调到 3 秒（attach 晚于这一轮结束），4 个“接上进行中一轮”的用例全部因 `running: true` 那条断言失败；只去掉等待、不推迟 attach 时，正常负载下只有 FX3 那个失败（其余脚本里本来就有足够长的步骤）。CR5：撤回收尾后早退，迟到事件用例失败。
+  - CR4 部分通过：顺序用例在副本里把终态写入挪到 summary 延迟之前后失败（挪到延迟之后、紧挨 summary 时窗口只有几毫秒，10 ms 轮询抓不到）；`run wait` 用例在副本里只撤回“等 pendingSpawnPid 和锁”（恢复成修复前的 `waitForPidExit(state.worker?.pid ?? lastWorkerPid)`）后 3/3 仍通过：新工作进程活了 1.5 秒以上，`run wait` 50 ms 轮询早从 `state.json` 记下了它的 pid。dsh 的反证是把等待整段删掉，比撤回范围大。临时探针（`WAIT_POLL_MS=2000`、`PAUSE_BEFORE_RELEASE_MS=2500`，新工作进程在两次轮询之间收尾）修复版 3/3 通过、撤回版 3/3 失败，修复本身正确。
+  - CR3：`run-lock` 24 份 × 3 轮全部通过。CR6：20 个占满 CPU 的进程期间，4 个文件各 24 份 × 3 轮（1 轮用默认 60 秒超时、2 轮 300 秒）、3 个文件各 8 份 × 3 轮，全部通过，每轮 26–37 秒；按 PID 结束后无残留。dsh 汇报的“默认 60 秒超时下 72/96 文件超时”本机没复现（dsh 在沙箱里每轮 87 秒），不需要为负载验收另定超时。CR7：`npm test` 10 次 146/146，每次 16–17 秒，无残留；S3 测试 58 个用例 16.4 秒；`npm run build` 退出码 0，`dist/` 已删。
+  - 审阅：run-cancel RW9“对停下的任务取消不应联系执行端”改成只断言“没有新增 cancel 命令”，比原意（不联系执行端）宽；副本里改成“没有新增任何命令”，正常 3 次、满 CPU 下 24 份都通过，可以收紧。
+  - 回填：dev-setup.md 补了 4 个测试变量（`CANCEL_WAIT_POLL_MS`、`PAUSE_AFTER_START_MS`、`SUMMARY_DELAY_MS`、`PAUSE_BEFORE_RELEASE_MS`，`CANCEL_POLL_MS` 不再给 `run cancel` 用）和假执行端的新脚本开关；dsh 提到的“`run wait` 也等锁释放”protocol.md §6 已写，不用再改。
+- 2026-10-24 补测试（[briefs/1a-s3-ci-rework2.md](briefs/1a-s3-ci-rework2.md)）由 Claude 在 dsh Web 派发并交付，验收通过：RC1–RC4 全部通过。【已验证】2026-10-24，Claude 重跑：
+  - 隔离：对照 `s3cr2-baseline.txt`，只有 `tests/run-finalize.test.mjs`（一个用例的参数和注释）和 `tests/run-cancel.test.mjs`（RW9 断言，去掉不再用的导入）变了；产品代码、文档、profiles 不变，`~/.agent-collab` 不存在，dsh Web 进程号未变。会话日志：从第一条记录起就是 `workspace-write`、审批策略 `ask`，没有审批请求，没有 git 写操作，副本和删除都在沙箱的 `/tmp` 里，`kill` 只针对自己启动的占 CPU 进程。
+  - RC1：`run wait` 用例改为 `WAIT_POLL_MS=2000`、`PAUSE_BEFORE_RELEASE_MS=2500`。副本里只把 `cmdWait` 收尾恢复成 `waitForPidExit(state.worker?.pid ?? lastWorkerPid, 3000)`，3/3 失败（“run wait 返回后工作进程 … 还活着”），20 个占满 CPU 的进程下 4/4 失败；修复版 3/3 通过。
+  - RC2：副本里让 `run cancel` 处理停下的任务时经适配器发一条 `attach`，三个 RW9 用例 3 次都失败，失败信息带出那条命令；修复版 `run-cancel` 3 次 6/6。
+  - RC3：20 个占满 CPU 的进程期间，`run-finalize`、`run-cancel` 各 8 份 × 2 轮全部通过，每轮 13–15 秒；按 PID 结束后无残留。RC4：`npm test` 3 次 146/146，每次 16–17 秒，无残留。
+  - dsh 指出的局限：RC1 的判别力靠时序，新工作进程从启动到写终态（本机约 1.8 秒）要短于 2 秒的轮询间隔；机器慢到超过这个时长时，撤回版也可能通过（漏报，不会误报失败）。暂不处理。

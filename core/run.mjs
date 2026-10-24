@@ -325,7 +325,7 @@ async function cmdWait(argv, io, context) {
   if (!runId) throw usageError('run wait 需要任务号');
   const home = await resolveHome(env, context);
   const repoRoot = await resolveRepoRoot(options, cwd);
-  const { runDir } = await locateRun({ home, runId, repoRoot });
+  const { runDir, repoId } = await locateRun({ home, runId, repoRoot });
   const statePath = path.join(runDir, 'state.json');
   const timeoutMs = options.timeout ? Number(options.timeout) * 1000 : null;
   if (options.timeout !== undefined && !Number.isFinite(timeoutMs)) throw usageError('--timeout 需要秒数');
@@ -342,7 +342,24 @@ async function cmdWait(argv, io, context) {
     if (state.worker && Number.isInteger(state.worker.pid)) lastWorkerPid = state.worker.pid;
     if (isSettledStatus(state.status)) {
       // 等工作进程真正退出：这时 summary.json 已经写完，调用方不会看到半成品，也不会留下后台进程。
-      await waitForPidExit(state.worker?.pid ?? lastWorkerPid, 3000);
+      // 也要等本进程刚启动的那个工作进程（pendingSpawnPid）：它可能在一次轮询间隔里就收完尾，
+      // 这时 state.json 里的 pid 还是上一个已经死掉的，只等它会立即返回。
+      const pids = new Set();
+      for (const pid of [state.worker?.pid, lastWorkerPid, pendingSpawnPid]) {
+        if (Number.isInteger(pid) && pid > 0) pids.add(pid);
+      }
+      // 锁要等它释放：工作进程写完终态后还要释放锁、关适配器，紧接着 run start 的调用方
+      // 不该因为“上一个任务的锁还在”被 lock_held 拒绝。
+      const lockFile = lockFileFor(home, repoId);
+      const lock = await readLock(lockFile);
+      if (lock && lock.runId === state.runId && Number.isInteger(lock.pid)) pids.add(lock.pid);
+      for (const pid of pids) await waitForPidExit(pid, 3000);
+      const lockDeadline = Date.now() + 3000;
+      for (;;) {
+        const current = await readLock(lockFile);
+        if (!current || current.runId !== state.runId || Date.now() >= lockDeadline) break;
+        await sleep(25);
+      }
       return finishWait(io, runDir, state);
     }
     const workerAlive = Boolean(state.worker && isPidAlive(state.worker.pid));
@@ -596,7 +613,9 @@ async function cmdCancel(argv, io, context) {
   const workerPid = state.worker?.pid ?? null;
   await writeJson(path.join(runDir, 'cancel.request'), { v: 1, at: nowIso() });
   const timeoutMs = envNumber(env, 'AGENT_COLLAB_TEST_CANCEL_TIMEOUT_MS', 10000);
-  const pollMs = envNumber(env, 'AGENT_COLLAB_TEST_CANCEL_POLL_MS', 100);
+  // 工作进程查 cancel.request 的间隔用 AGENT_COLLAB_TEST_CANCEL_POLL_MS（在 worker.mjs），
+  // run cancel 自己等状态变化的间隔单独一个变量，测试才能只冻结其中一边。
+  const pollMs = envNumber(env, 'AGENT_COLLAB_TEST_CANCEL_WAIT_POLL_MS', 100);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     state = (await readJson(statePath)) ?? state;
