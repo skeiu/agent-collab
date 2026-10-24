@@ -86,3 +86,18 @@
   - 小出入，接受：`--test-timeout` 实际是每个测试文件的时限，超时报出的是文件名而不是用例名（Node 22 实测）；用例先抛错再挂住时用例名和错误也会报出。已把 dev-setup.md 的说明改准。dsh 读取了 `~/.dsh/attachments/` 下的任务书附件（用户以附件形式发送任务书所致，内容就是任务书本身），以后派发时贴任务书路径，不用附件。dsh 跑默认构建后留下了 `dist/`（已在 `.gitignore`，Claude 已删除）。
 - 2026-10-24 第 1 轮修复推送后（`2719951`，CI 运行 40055863970）：Windows 不再挂住，87/88 通过；并发读写用例里改名重试约 1.1 秒用尽仍 `EPERM`（用户提供日志）。第 2 轮任务书 [briefs/1a-ci-windows-fix2.md](briefs/1a-ci-windows-fix2.md)：重试改为按 10 秒总预算，测试不放宽读循环频率。S3 任务书加了一条：`state.json` 写入失败时工作进程不退出，记 warning、下次再写（S3 尚未派发，不涉及已确认的契约字段）。
 - 2026-10-24 Windows CI 第 2 轮修复验收：AC1–AC3 通过。【已验证】2026-10-24，Claude 重跑：`tests/atomic-write.test.mjs` 8/8（“重试用尽”用注入的 200 ms 预算）；两份 `renameWithRetry` 逐行比对相同；用模拟的持续 `EPERM` 实测默认参数，两份实现都在 10000 ms 时停止，共 99 次尝试，错误上带 `attempts`、`elapsedMs`；`npm test` 88/88，`npm run build` 退出码 0，两个集成脚本 `RESULT: 通过`，`dist/` 已删；`package.json`、CI 配置未改；`~/.dsh/profiles` 的 4 个哈希与基准一致；本机信息扫描无命中。同日经用户授权提交并推送（`a67780f`），CI 运行 40056577654 的 6 组全部通过，Windows 两组各约 25 秒。【已验证】2026-10-24，GitHub API 查询作业结论。
+- 2026-10-24 S3 验收：未通过，返工任务书 [briefs/1a-s3-rework.md](briefs/1a-s3-rework.md)（草稿）。【已验证】2026-10-24，Claude 重跑并审读代码：
+  - 范围和隔离：相对 `1d1a963` 只新增 21 个路径；`~/.dsh/profiles` 4 个哈希和目录列表与基准一致，`~/.agent-collab` 仍不存在；会话日志开工前已切到 `workspace-write`，无审批请求，git 写操作都在 `mktemp` 的临时仓库里；dsh 写过的临时脚本已删。`npm run build` 退出码 0，新文件都有职责说明，无依赖。
+  - 测试：`npm test` 11 次里 2 次失败（124 个用例）。原因：`startFakeExecutor` 读到假执行端没写完的端口文件，`JSON.parse` 报错；失败后假执行端没人结束，管道让测试文件挂满 60 秒，假执行端成为孤儿（dsh 自己 11:25 开的后台测试也因此挂住，汇报时仍在跑）。
+  - 实测复现的缺陷：`acquireLock` 先建空文件再写内容，4 个进程并发 60 轮有 2 轮不止一个拿到锁；`run cancel` 等待期间任务自己以 `done` 结束时，被改成 `cancelled`（“工作进程未响应”）并重写 `summary.json`；临时 index 从空开始，被跟踪又匹配 `.gitignore` 的文件不进快照；git 输出未用 `-z`，中文路径成了八进制转义，跨目录改名的增删行数为 0。
+  - 读代码发现：`summary.reportError` 在最后一轮合法时仍带前一轮的错误（与 protocol.md 5.6 不符）；`attach` 返回 `running: false` 时记 `failed`，工作进程掉线期间跑完的一轮汇报会丢（T23 情形）。
+  - 低风险、不要求改：`run start`、`run resume` 启动工作进程后再写一次 `state.json`，可能短暂覆盖工作进程刚写的内容，下次写入即恢复；`watch` 每次轮询重读整个 `events.jsonl`。
+  - 拆出的辅助模块（待回填 PLAN.md §7.1）：`core/rundir.mjs`、`core/git.mjs`、`core/events.mjs`、`core/executor.mjs`、`core/worker.mjs`。
+- 2026-10-24 S3 返工任务书第 8、9 条按 Claude 推荐定稿【已确认】用户 2026-10-24：先改了 protocol.md §3（`attach` 的 `running: false` 带回 `result`）、§5.5（`worker_lost` 的含义）、§6（`run cancel` 可取消停下的任务、`run wait` 接上的说明）和 PLAN.md §11.3，登记 DECISIONS.md；任务书定稿待派发。dsh 上一轮卡住的后台测试进程已不在。
+- 2026-10-24 S3 返工验收：RW1–RW10 全部通过。【已验证】2026-10-24，Claude 重跑：
+  - 范围和隔离：改动的 12 个文件、新增的 2 个（`tests/fixtures/lock-worker.mjs`、`tests/run-lock-atomic.test.mjs`）与汇报一致；文档哈希与返工前基准相同；`~/.dsh/profiles` 不变，`~/.agent-collab` 不存在；会话开工前已切 `workspace-write`，无审批请求，没有后台任务，git 写操作只在 `mkdtemp` 的临时仓库里。dsh 读过 `.git/agent-collab-baselines/` 下的基准文件（只读，内容是哈希和文件列表）。
+  - 用上一轮的复现脚本重跑：`run cancel` 竞态下 `statusReason` 为“设计端取消；取消前为 done”；被跟踪又匹配 `.gitignore` 的文件进了快照和补丁；中文路径原样；跨目录改名 `added: 1`；4 个进程抢锁 60 轮、抢一个 pid 已死的旧锁 60 轮，都没有双占。
+  - `node --test` 连跑 12 次，每次 137/137、约 9 秒，跑完没有假执行端、工作进程、锁测试子进程残留；在 scratchpad 里写一个启动假执行端后立即抛错的用例，0.23 秒结束、无残留。`npm run build` 退出码 0，`dist/` 已删，无依赖。
+  - 审读：锁改为临时文件加 `fsp.link`，打破旧锁用互斥文件并重读确认，互斥文件超过 5 秒可清；`run cancel` 分进行中、等待期间自己停下、停下三条路径；`attach` 带回 `result` 时按正常一轮结束处理。
+  - 待回填（下一步起草给用户审阅）：protocol.md §5.2 锁的写法和 `lock_held` 的 `data` 多 `pid`、§5.5 `state.json` 多出的 `turnKinds`/`title`/`images`/`taskConfig`、`session` 事件由运行时写、拒绝表之外的 `error.code`、`run wait` 等工作进程退出再返回且文件取最后一轮、仓库外 `run status` 返回空列表、`turn_end` 两种来路、`--set` 的点号路径；按 PID 结束工作进程时没有补丁文件、`summary` 的改动由基线重算；对停下的任务取消时 `summary.json` 缺失就补一份（dsh 的疑问，Claude 认为可以接受）。PLAN.md §7.1 补 5 个辅助模块；dev-setup.md 写 `AGENT_COLLAB_TEST_` 变量。
+- 2026-10-24 S3 回填（protocol.md 通用约定、§4、§5.2、§5.3、§5.5、§5.6、§6，PLAN.md §7.1、§11.3，dev-setup.md 的测试环境变量）用户审阅 diff 后原样通过【已确认】用户 2026-10-24，登记 DECISIONS.md；`run start` 重写 `state.json`、`watch` 重读整个事件文件两项记为 RISKS.md R9、R10。

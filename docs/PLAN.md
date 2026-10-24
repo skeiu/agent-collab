@@ -260,7 +260,12 @@ agent-collab/
 ├── bin/
 │   └── collab.mjs                 各工具入口统一调用的启动器：找到共享运行时，缺失时提示安装；开发模式下直接用仓库里的 core/
 ├── core/                          共享运行时的源码，安装时复制到 ~/.agent-collab/runtime/<版本>/
-│   ├── run.mjs                    派发、续接、取消、等待；后台工作进程（D20）、基线快照（D21）、任务锁（D23）；卡死检测、提取汇报、生成补丁、写 summary.json
+│   ├── run.mjs                    run 子命令：派发、续接、取消、等待、查看状态；启动后台工作进程（D20）
+│   ├── worker.mjs                 后台工作进程：接上执行端、写事件和状态、卡死检测、取消、提取汇报和重发、生成补丁、写 summary.json
+│   ├── rundir.mjs                 运行目录、仓库标识、任务号、仓库锁（D23）
+│   ├── git.mjs                    基线快照（D21）、补丁和改动统计、违规检查
+│   ├── events.mjs                 events.jsonl 的追加和恢复、summary.json 的汇总
+│   ├── executor.mjs               执行端适配器的定位、加载和选项组装
 │   ├── watch.mjs                  把事件流转成里程碑行（给 Monitor 用）
 │   ├── doctor.mjs                 环境自检
 │   ├── setup.mjs                  检测、生成安装计划、安装、同步、卸载
@@ -290,9 +295,10 @@ agent-collab/
 │       ├── index.js               cordis 插件入口：监听端口、发令牌、管理连接
 │       ├── acp-server.js          ACP 方法实现
 │       ├── jsonrpc.js             与 core/jsonrpc.mjs 内容相同的一份（桥接装进 dsh profile 后拿不到 core/），由测试保证两份一致
+│       ├── atomic-write.js        发现文件的原子写入，改名重试与 core/platform.mjs 保持一致
 │       └── dsh-api.js             所有 dsh 内部服务调用都集中在这一个文件
 ├── scripts/build.mjs              生成 skills/collab/SKILL.md、打包桥接 .tgz、组装运行时
-├── tests/                         单元测试（用假的 dsh 和执行端，node --test 运行）；fixtures/ 放假对端；integration/ 放要真 dsh 的集成测试脚本，单独运行
+├── tests/                         单元测试（用假的 dsh 和执行端，node --test 运行）；fixtures/ 放假对端；helpers/ 放测试公共工具；integration/ 放要真 dsh 的集成测试脚本，单独运行
 ├── docs/
 │   ├── PLAN.md                    本文件
 │   ├── protocol.md                字段级接口契约：桥接扩展字段、统一事件、运行目录文件、CLI 输出
@@ -534,7 +540,7 @@ capabilities()                     → { images, structuredOutput, liveView, res
 start({ cwd, runId, title, brief, images, options, env })
                                    → { sessionId, transport, model, turn }   turn 是本轮结束的 Promise
 resume({ sessionId, message })     → { turn }
-attach({ sessionId, sinceCursor }) 工作进程重启后，重新接上仍在运行的会话（不支持的执行端返回 attached: false）
+attach({ sessionId, sinceCursor }) 工作进程重启后重新接上会话；这一轮在工作进程不在期间已结束时带回它的结果（不支持的执行端返回 attached: false）
 cancel({ sessionId })
 close()
 onEvent(event)                     创建适配器时传入的回调，收到统一格式的事件：
@@ -542,7 +548,7 @@ onEvent(event)                     创建适配器时传入的回调，收到统
                                    human_message / approval / question / turn_end / warning / error
 ```
 
-`run.mjs` 只认这套统一格式，它负责写 `events.jsonl`、提取汇报、卡死检测和生成 `summary.json`。`sinceCursor` 是适配器自己定义的补发位置（dsh 桥接用事件序号）。签名和统一事件的字段以 [protocol.md](protocol.md) 第 3、4 节为准。
+`run.mjs` 和它启动的工作进程（`worker.mjs`）只认这套统一格式，由工作进程写 `events.jsonl`、提取汇报、做卡死检测和生成 `summary.json`。`sinceCursor` 是适配器自己定义的补发位置（dsh 桥接用事件序号）。签名和统一事件的字段以 [protocol.md](protocol.md) 第 3、4 节为准。
 
 ### 11.4 防止套娃
 

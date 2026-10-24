@@ -19,6 +19,25 @@ node --test --test-timeout=60000
 
 测试会自己创建临时目录，只使用系统临时目录（`os.tmpdir()`），不依赖开发机的特有配置。
 
+### 运行时测试用的环境变量
+
+`tests/run-*.test.mjs` 用假执行端（`tests/fixtures/fake-executor.mjs`，独立进程）和假适配器测试 `run`、`watch`，并用下面的环境变量缩短等待时间。这些变量只给测试用，正式配置项不受影响；`AGENT_COLLAB_TEST_ADAPTER` 以外的变量不设时用括号里的默认值。
+
+| 变量 | 作用 |
+|---|---|
+| `AGENT_COLLAB_TEST_ADAPTER` | 适配器模块的绝对路径，代替按执行端名查找 `core/adapters/<name>.mjs` |
+| `AGENT_COLLAB_TEST_IDLE_TIMEOUT_MS` | 卡死阈值（`idleTimeoutMinutes` × 60000） |
+| `AGENT_COLLAB_TEST_STALL_POLL_MS` | 工作进程检查卡死的间隔（5000） |
+| `AGENT_COLLAB_TEST_CANCEL_POLL_MS` | 工作进程检查 `cancel.request` 的间隔（500）；`run cancel` 轮询状态的间隔也用它（100） |
+| `AGENT_COLLAB_TEST_CANCEL_TIMEOUT_MS` | `run cancel` 等工作进程确认的时长（10000） |
+| `AGENT_COLLAB_TEST_KILL_GRACE_MS` | `run cancel` 发 SIGTERM 后等多久再发 SIGKILL（2000） |
+| `AGENT_COLLAB_TEST_WAIT_POLL_MS` | `run wait` 轮询状态的间隔（200） |
+| `AGENT_COLLAB_TEST_ATTACH_GRACE_MS` | `run wait` 两次启动新工作进程的最小间隔（1500） |
+| `AGENT_COLLAB_TEST_WATCH_POLL_MS` | `watch` 轮询事件的间隔（100） |
+| `AGENT_COLLAB_TEST_STATE_WRITE_FAIL_ONCE` | 设为 `1` 时让工作进程第一次写 `state.json` 失败，测试写入失败不退出 |
+
+`AGENT_COLLAB_FAKE_EXECUTOR`（假执行端的 `host:port`）只由测试传给假适配器，运行时不读它。每个用例在系统临时目录下新建 git 仓库和 `AGENT_COLLAB_HOME`，结束时按 PID 结束自己启动的工作进程和假执行端。【已验证】2026-10-24，Linux、Node 22：`node --test` 连跑 12 次 137/137，跑完无残留进程。
+
 ## 集成测试
 
 `tests/integration/` 下的脚本需要真实工具，不进入 `node --test`；用下面的命令单独运行（前置条件：Linux、Node.js ≥ 20、PATH 上有 `dsh`）：

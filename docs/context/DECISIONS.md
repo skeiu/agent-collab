@@ -22,6 +22,8 @@
 | 1a 实现决定 1、2、3、6、7 回填 | PLAN.md §7.1、§9.4、§11.5、§12.1、§12.2 等按 [1a-impl-plan.md](1a-impl-plan.md)“需要用户拍板的实现决定”修改：ACP 自写精简版；acp 覆盖层借用 dsh 安装里的 `yaml` 包解析；字段级接口契约放 `docs/protocol.md`；`core/` 可加辅助模块、不建 `config/defaults.json`；项目级配置不能覆盖权限和执行环境类的项 | 【已确认】确认人：用户，2026-10-23（全部按推荐方案） | 被否决的替代方案见下节 |
 | S2 实测结论回填 | PLAN.md §5.2、§5.4、§7.1、§9.3、§9.4、§11.9 和 protocol.md §2.5、§2.7 按 S2 实测修改：dsh 默认有 `read-only` 权限预设；没有 `assistant/chunk`，文字和思考取自 `assistant/message` 的内容块，按整条消息转发；只转发 `source.kind` 为 `user` 的 `user/message`；用量字段、`endReason` 取值；`stoppedBy` 由桥接按连接状态判定；版本范围用可选的 `peerDependencies`；RISKS.md 加 R8（`eventAt` 被 dsh 标为禁用） | 【已确认】确认人：用户，2026-10-23（审阅 diff 后原样通过） | [1a-impl-plan.md](1a-impl-plan.md)“进展”S2 验收 |
 | 项目级配置只能收紧 4 个安全相关项（决定 7 的补充） | PLAN.md §12.2：`protectedPaths` 取并集，`confirmBeforeDispatch` 取较严，`freshReviewForRisky` 只认 `true`，`commitOnAccept` 只认 `false`；S1 验收审读代码时发现项目文件能清空保护路径、关掉派发前确认 | 【已确认】确认人：用户，2026-10-23 | 被否决的替代方案见下节 |
+| S3 验收：`attach` 带回已结束一轮的结果、可取消停下的任务 | protocol.md §3、§5.5、§6 和 PLAN.md §11.3：工作进程不在期间执行端跑完的一轮，`attach` 以 `running: false` 加 `result` 带回，运行时照正常的一轮结束处理；`run cancel` 对停下的任务直接记为 `cancelled`，只改状态字段 | 【已确认】确认人：用户，2026-10-24 | 被否决的替代方案见下节；返工任务书 [briefs/1a-s3-rework.md](briefs/1a-s3-rework.md) 第 8、9 条 |
+| S3 实现回填 | protocol.md §4、§5.2、§5.3、§5.5、§5.6、§6 和通用约定按 S3 实现修改：`session` 事件由运行时写、`turn_end` 由运行时在适配器没发时补写；仓库锁改为临时文件加 `link`、打破旧锁用互斥文件；`state.json` 增加 `turnKinds`、`title`、`images`、`taskConfig`；补齐拒绝表之外的 `error.code`；`run wait` 等工作进程退出再返回。PLAN.md §7.1 补 5 个运行时辅助模块和 `atomic-write.js`，§11.3 改为由工作进程写事件；dev-setup.md 写测试用的环境变量 | 【已确认】确认人：用户，2026-10-24（审阅 diff 后原样通过） | [1a-impl-plan.md](1a-impl-plan.md)“进展” |
 
 ## 被否决的替代方案
 
@@ -36,6 +38,8 @@
 | 桥接和端到端测试全部用真实模型 | 本地假 LLM 服务（OpenAI 兼容接口，按脚本返回）；真实模型只用于 T11、T13；探针不成立时退回真实模型 | 确定、可重复、不花 token | 用户，2026-10-23（1a 实现决定 4） |
 | 所有配置项都允许项目级覆盖 | 权限和执行环境类的项不允许出现在 `.agent-collab.json` | 项目文件随仓库来，可能不可信 | 用户，2026-10-23（1a 实现决定 7） |
 | 这 4 项和决定 7 的项一样，完全不允许项目级设置 | 项目级只能收紧 | 仓库仍能声明自己的保护路径、要求更严的确认；放宽的路被堵住 | 用户，2026-10-23 |
+| `attach` 时本轮已结束就记 `failed`（S3 的实现） | 带回 `result` 并照常结束这一轮 | 工作进程掉线而执行端继续跑完正是 T23 的情形，记 `failed` 会丢掉这一轮的汇报 | 用户，2026-10-24 |
+| `run cancel` 只能取消进行中的任务，停下的以 `not_running` 拒绝（S3 的实现） | 停下的任务也可取消，直接记为 `cancelled` | 否则停下的任务无法“结束”，会一直出现在 `run status` 的列表里 | 用户，2026-10-24 |
 
 ## 项目决策（PLAN.md 之外）
 

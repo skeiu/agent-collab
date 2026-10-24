@@ -2,7 +2,7 @@
 
 # 接口契约
 
-> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。
+> 状态：Claude 2026-10-23 起草，用户同日审阅原样通过【已确认】用户 2026-10-23。标【未验证】的字段依赖 dsh 内部事件的实际形态，S2 实现时按实测修正本文。2026-10-23 已按 S2 实测修正 §2.5、§2.7（dsh 0.2.1-rc.2），用户审阅 diff 后原样通过【已确认】用户 2026-10-23。2026-10-24 按 S3 验收的决定修改 §3 的 `attach`（本轮已结束时带回 `result`）、§5.5 的 `worker_lost`、§6 的 `run cancel`（可取消停下的任务）和 `run wait` 的接上说明【已确认】用户 2026-10-24。2026-10-24 按 S3 实现回填 §4、§5.2、§5.3、§5.5、§5.6、§6，用户审阅 diff 后原样通过【已确认】用户 2026-10-24。
 
 ## 通用约定
 
@@ -10,6 +10,7 @@
 - 所有 JSON 文件都是 UTF-8、对象顶层，带 `v`（本文件格式的版本，当前为 `1`）；由写入方原子写入（同目录临时文件再改名），权限只给本人（POSIX 上目录 0700、文件 0600）。
 - 时间一律是 ISO 8601 的 UTC 字符串（`2026-10-23T08:00:00.000Z`）。
 - 路径：文件里记录的绝对路径都是 `realpath` 之后的；仓库内的路径用相对仓库根目录、以 `/` 分隔的形式。
+- 本文的 `run.mjs` 泛指运行时：`core/run.mjs` 和它启动的工作进程（`core/worker.mjs` 等辅助模块，见 PLAN.md §7.1）。
 - 长文本截断：工具输入和输出每个字段最多 8 KiB，超出时截断并在同级加 `truncated: true`。回复文字（`text`）不截断，汇报要从里面提取。
 
 ## 1. 桥接发现文件
@@ -169,8 +170,8 @@ capabilities() → { images, structuredOutput, liveView, resume, humanApproval }
 start({ cwd, runId, title, brief, images, options, env })
     → { sessionId, transport, model, turn }      turn: Promise<TurnResult>
 resume({ sessionId, message }) → { turn }
-attach({ sessionId, sinceCursor }) → { attached: boolean, running: boolean, turn? }
-                                                  running 为 true 时带 turn
+attach({ sessionId, sinceCursor }) → { attached: boolean, running: boolean, turn?, result? }
+                                                  running 为 true 时带 turn；为 false 时带 result: TurnResult
 cancel({ sessionId }) → Promise<void>
 close() → Promise<void>
 
@@ -180,6 +181,7 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 - `options` 是 `config.mjs` 按执行端合并好的选项（`model`、`reasoningEffort`、`permissionPreset`、`unattendedApproval`、`agentPreset` 等）。
 - `env` 是要注入执行端的变量；dsh 适配器在桥接模式下只传 `DSH_` 开头的键，其他键写一条 `warning` 事件后丢弃。
 - `finalText`：本轮最后一步的回复文字，即最后一次工具调用之后的全部 `text` 事件拼起来；本轮没有工具调用时就是全部 `text`。
+- `attach` 的 `running` 为 false 表示工作进程不在期间这一轮已经结束：适配器先通过 `onEvent` 补发 `sinceCursor` 之后的事件，再在 `result` 里给出这一轮的 `TurnResult`（`finalText` 按上一条从补发的事件算出）。运行时把它当作正常的一轮结束处理。拿不到结果时不带 `result`。
 - 统一事件可以带 `cursor`（适配器自己定义的补发位置，dsh 桥接为 `{ seq, sub }`），`run.mjs` 把最后一个 `cursor` 存进 `state.json`，工作进程重启后传给 `attach`。
 
 ## 4. 统一事件（`events.jsonl`）
@@ -195,9 +197,11 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 | `type` | 下表之一 |
 | `cursor` | 可选，见第 3 节 |
 
+`v`、`n`、`at`、`turn` 一律由 `run.mjs` 填写，适配器的事件里即使带了也会被覆盖。
+
 | `type` | 字段 |
 |---|---|
-| `session` | `sessionId`、`executor`、`transport`（`bridge` / `acp` / 其他执行端自定）、`model`、`agentPreset`、`permission` |
+| `session` | `sessionId`、`executor`、`transport`（`bridge` / `acp` / 其他执行端自定）、`model`、`agentPreset`、`permission`：由 `run.mjs` 在 `start` 返回后写，适配器不发 |
 | `thinking` | `text` |
 | `text` | `text` |
 | `tool_call` | `callId`、`name`、`input` |
@@ -206,9 +210,9 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 | `human_message` | `text`、`source` |
 | `approval` | `state`（`pending` / `resolved`）、`approvalId`、`toolName`、`callId`、`reason`、`outcome` |
 | `question` | `state`（`pending` / `resolved`）、`callId`、`questions` |
-| `turn_end` | `stopReason`、`endReason`、`stoppedBy` |
+| `turn_end` | `stopReason`、`endReason`、`stoppedBy`：适配器可以发；本轮没有发时，`run.mjs` 按 `TurnResult` 补写，同一轮只写一条 |
 | `status` | `from`、`to`、`reason`：任务状态变化，由 `run.mjs` 写 |
-| `warning` | `message` |
+| `warning` | `message`：适配器和运行时都可以写；运行时在 `state.json` 写入失败、超过空闲超时、收到 `cancel.request` 时各写一条 |
 | `error` | `message`、`fatal`（布尔） |
 
 ## 5. 运行目录
@@ -223,8 +227,10 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 
 同一仓库同时只有一个运行中的任务（D23）。锁放在仓库这一级，不放在任务目录里，这样“看有没有任务在跑”只需看一个文件。
 
-- 内容：`{ v, runId, pid, phase, createdAt }`，`phase` 为 `starting`（`run start` 持有）或 `worker`（工作进程持有）。
-- 获取：以独占创建（`wx`）方式写入；文件已存在且 `pid` 存活就拒绝；`pid` 不存活就删除后重试一次。
+- 内容：`{ v, runId, pid, phase, createdAt }`，改写时加 `updatedAt`；`phase` 为 `starting`（`run start` 持有）或 `worker`（工作进程持有）。
+- 获取：先把完整内容写进同目录的临时文件，再用硬链接（`link`）建成 `active.lock`，已存在即被占用。这样别的进程读到的锁要么不存在、要么内容完整。文件系统不支持硬链接时退回独占复制（`COPYFILE_EXCL`）。
+- 被占用：锁里的 `pid` 存活，或锁里任务的 `state.json` 中工作进程的 `pid` 存活。内容读不出来的锁，修改时间在 5 秒内的按被占用处理。
+- 打破旧锁：先以独占创建拿到互斥文件 `active.lock.break`（修改时间超过 5 秒的视为遗留，可以删除），重读锁，确认仍是刚才判定无人持有的那一份才删除，然后重新获取。获取总共最多重试 15 秒。
 - `run start` 先以自己的 pid 拿锁，启动工作进程后改写为工作进程的 pid；工作进程在任务进入 5.5 节的“停下”或“结束”状态时释放锁。
 - `run resume` 重新获取锁。
 
@@ -237,7 +243,7 @@ TurnResult = { stopReason, endReason, stoppedBy, finalText }
 | `brief.md` | `run start` | 任务书，即第 1 轮的消息 |
 | `prompt-<n>.md` | `run resume` 或工作进程 | 第 n 轮（n ≥ 2）发给执行端的消息 |
 | `report-<n>.json` | 工作进程 | 第 n 轮提取出的汇报；提取失败时为 `{ v, error: { kind, message } }` |
-| `patch-<n>.diff` | 工作进程 | 第 n 轮结束时工作区相对基线的补丁（含新建的未跟踪文件） |
+| `patch-<n>.diff` | 工作进程 | 第 n 轮结束时工作区相对基线的补丁（含新建的未跟踪文件）；`run cancel` 按 pid 结束工作进程时，这一轮不写 |
 | `events.jsonl` | 工作进程 | 第 4 节 |
 | `summary.json` | 工作进程 | 见 5.6 |
 | `cancel.request` | `run cancel` | 存在即表示要求取消，内容 `{ v, at }`；工作进程定期检查。用文件而不是信号，各平台通用 |
@@ -266,7 +272,11 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 | `lastEventN` | `events.jsonl` 里最后一个 `n` |
 | `lastActivityAt` | 最后一次收到执行端事件的时间，卡死检测用 |
 | `waiting` | `{ approvals: [approvalId], questions: [callId] }`；任一不空时不计卡死时间 |
-| `protectedPaths` | 本任务的受保护路径（相对仓库根目录；以 `/` 结尾表示目录） |
+| `protectedPaths` | 本任务的受保护路径（相对仓库根目录；以 `/` 结尾表示目录；按字面匹配，不是通配符） |
+| `turnKinds` | `{ "<n>": kind }`，每一轮的 `kind`，`summary.turns[].kind` 取自这里 |
+| `title` | `--title`，没有时为 `null` |
+| `images` | `--image` 的绝对路径，传给适配器的 `start` |
+| `taskConfig` | `--set` 解析出的任务级配置；工作进程重启时据此重建配置 |
 | `createdAt`、`updatedAt`、`endedAt` | |
 
 状态：
@@ -275,7 +285,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 - **停下**（本轮结束，等设计端处理）：`done`、`partial`、`blocked`（取自汇报的 `status`）、`report_invalid`、`stalled`、`stopped_by_human`、`failed`。设计端可以对这些状态 `run resume`。
 - **结束**：`cancelled`。不能再 `resume`。
 
-`failed` 的 `statusReason` 常见值：`worker_lost`（工作进程不在了且 `attach` 失败）、`executor_error`、`transport_unavailable`。
+`failed` 的 `statusReason` 常见值：`worker_lost`（工作进程不在了，`attach` 失败，或接上时这一轮已结束但没有 `result`）、`executor_error`、`transport_unavailable`。
 
 ### 5.6 `summary.json`
 
@@ -288,7 +298,7 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 | `turns[]` | `{ n, kind, startedAt, endedAt, stopReason, endReason, stoppedBy, report: "valid" \| "invalid" \| "missing", reportFile, patchFile, usage }` |
 | `report` | 最近一次合法的汇报对象，没有时为 `null` |
 | `reportError` | 最近一轮汇报提取失败的 `{ kind, message }`，否则为 `null` |
-| `changes` | `{ files: [{ path, change: "A" \| "M" \| "D" \| "R", from?, added, deleted }], stat }`：最近一轮补丁的改动统计，`stat` 是类似 `git diff --stat` 的文字 |
+| `changes` | `{ files: [{ path, change: "A" \| "M" \| "D" \| "R", from?, added, deleted }], stat }`：最近一轮补丁的改动统计，`stat` 是类似 `git diff --stat` 的文字；工作进程被 `run cancel` 按 pid 结束时，由 `run cancel` 对基线重新计算 |
 | `violations[]` | `{ kind, path?, detail }`，`kind` 为 `protected_path`、`head_moved`、`branch_changed` |
 | `humanInputs[]` | `{ at, turn, text }` |
 | `approvals[]` | `{ approvalId, turn, toolName, reason, outcome, askedAt, decidedAt }` |
@@ -306,11 +316,11 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 
 | 命令 | 参数 | 成功时的输出 |
 |---|---|---|
-| `run start` | `--brief <文件>`、`--title <任务名>`、`--designer <名称>`（可选，skill 按设计端渲染时写死，如 `claude`；用来选默认执行端和记录 `designer`）、`--designer-model <模型>`（可选）、`--executor <名称>`（可选；没有它也没有 `--designer` 时报用法错误）、`--protected <路径>`（可重复，与配置里的 `protectedPaths` 合并）、`--image <文件>`（可重复）、`--set <键>=<JSON 值>`（可重复，单个任务级配置） | `{ ok, runId, runDir, status: "starting", workerPid }`，立即返回 |
-| `run wait <任务号>` | `--timeout <秒>`（可选） | 任务进入“停下”或“结束”状态时返回 `{ ok, runId, status, statusReason, summaryFile, patchFile, reportFile }`；超时返回 `{ ok, runId, status, timedOut: true }`，退出码 0 |
-| `run status [任务号]` | `--all`（所有仓库） | 有任务号：`{ ok, run: <state.json>, workerAlive }`；没有：`{ ok, runs: [{ runId, repoRoot, status, turn, updatedAt, workerAlive }] }`，只列未“结束”的任务 |
+| `run start` | `--brief <文件>`、`--title <任务名>`、`--designer <名称>`（可选，skill 按设计端渲染时写死，如 `claude`；用来选默认执行端和记录 `designer`）、`--designer-model <模型>`（可选）、`--executor <名称>`（可选；没有它也没有 `--designer` 时报用法错误）、`--protected <路径>`（可重复，与配置里的 `protectedPaths` 合并）、`--image <文件>`（可重复）、`--set <键>=<JSON 值>`（可重复，单个任务级配置；键可以是点号路径，如 `executors.dsh.model`；值不是合法 JSON 时按字符串） | `{ ok, runId, runDir, status: "starting", workerPid }`，立即返回 |
+| `run wait <任务号>` | `--timeout <秒>`（可选） | 任务进入“停下”或“结束”状态、工作进程退出后（最多再等 3 秒）返回 `{ ok, runId, status, statusReason, summaryFile, patchFile, reportFile }`，`patchFile`、`reportFile` 指最后一轮的文件，不存在时为 `null`；超时返回 `{ ok, runId, status, timedOut: true }`，退出码 0 |
+| `run status [任务号]` | `--all`（所有仓库） | 有任务号：`{ ok, run: <state.json>, workerAlive }`；没有：`{ ok, runs: [{ runId, repoRoot, status, turn, updatedAt, workerAlive }] }`，只列未“结束”的任务；不带 `--all` 且当前目录不是 git 仓库时 `runs` 为空 |
 | `run resume <任务号>` | `--message <文件>`、`--kind correction \| answer` | `{ ok, runId, turn, status: "starting", workerPid }` |
-| `run cancel <任务号>` | — | 工作进程确认后返回 `{ ok, runId, status: "cancelled" }`；10 秒内没确认就结束该工作进程（按 `state.json` 里的 pid），状态记为 `cancelled`，`statusReason` 注明 |
+| `run cancel <任务号>` | — | 进行中的任务：工作进程确认后返回 `{ ok, runId, status: "cancelled" }`；10 秒内没确认就结束该工作进程（按 `state.json` 里的 pid），状态记为 `cancelled`，`statusReason` 注明。停下的任务（含等待确认期间自己停下的）：不结束任何进程，直接记为 `cancelled`，`statusReason` 写明取消前的状态，`state.json` 和 `summary.json` 只改 `status`、`statusReason`、`endedAt`（`summary.json` 还没写出时，先按事件和基线补一份）。已是 `cancelled` 的直接返回成功 |
 | `watch <任务号>` | `--from <n>`（从第 n 个事件开始，默认从头） | 逐行打印里程碑（格式见下），任务进入“停下”或“结束”状态后退出 |
 | `doctor` | `--json`、`--deep` | 见下 |
 
@@ -320,11 +330,24 @@ PLAN.md §8 的表格原先写的是 `correction-<轮次>.md` 和任务目录里
 |---|---|---|
 | `executor_role` | `run start`、`run resume` | `AGENT_COLLAB_ROLE` 或 `DSH_AGENT_COLLAB_ROLE` 为 `executor`（PLAN.md §11.4） |
 | `not_git` | `run start` | 不是 git 仓库 |
-| `lock_held` | `run start`、`run resume` | 本仓库已有进行中的任务；`error.data` 为 `{ runId, status }` |
+| `lock_held` | `run start`、`run resume` | 本仓库已有进行中的任务；`error.data` 为 `{ runId, status, pid }`，锁的内容读不出来时为 `null` |
 | `round_limit` | `run resume` | 该 `kind` 的轮数已到上限 |
 | `not_resumable` | `run resume` | 任务处于“进行中”或“结束”状态 |
 
-`run wait` 发现任务处于“进行中”而工作进程不在了：先启动一个新的工作进程，用 `attach` 接上执行端会话；接不上就把任务记为 `failed`（`worker_lost`）再返回。
+其他 `error.code`：
+
+| `code` | 退出码 | 情况 |
+|---|---|---|
+| `usage` | 2 | 参数错误、未知命令 |
+| `run_not_found` | 4 | 找不到任务（`run` 子命令和 `watch`） |
+| `ambiguous_run` | 1 | 没有指定仓库，同一任务号在多个仓库下都存在；用 `--repo` 指定 |
+| `brief_unreadable` | 1 | `run start` 读不到 `--brief` 文件 |
+| `message_unreadable` | 1 | `run resume` 读不到 `--message` 文件 |
+| `executor_unavailable` | 1 | 找不到或加载不了执行端适配器 |
+
+意料之外的错误退出码为 1，`code` 可能是别的字符串（如 `GIT_FAILED`）。有任务号的命令先在当前仓库里找，找不到再在所有仓库里找。
+
+`run wait` 发现任务处于“进行中”而工作进程不在了：先启动一个新的工作进程，用 `attach` 接上执行端会话；这一轮已经结束时按 `attach` 带回的 `result` 结束这一轮；接不上或没有 `result` 就把任务记为 `failed`（`worker_lost`）再返回。
 
 `watch` 的行格式：`[T001 08:00:00] <内容>`，时间为本地时间。打印这些事件：`status` 变化、`tool_call`（工具名加一个简短的目标，如文件路径或命令的前 80 个字符）、`approval`、`question`、`human_message`、`turn_end`、`warning`、`error`；`thinking`、`text`、`usage` 不打印。
 
