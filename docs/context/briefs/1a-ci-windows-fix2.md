@@ -1,6 +1,6 @@
 本文件：Windows CI 修复第 2 轮交给 dsh 的任务书原文。派任务时让 dsh 读本文件执行；验收时对照；任务书改版时更新。
 
-> 状态：2026-10-24 派发并验收通过（见 [1a-impl-plan.md](../1a-impl-plan.md)“进展”），Windows 上是否修好待推送后的 CI。依据：CI 运行 40055863970 的 Windows 日志（用户 2026-10-24 提供）。第 1 轮见 [1a-ci-windows-fix.md](1a-ci-windows-fix.md)。
+> 状态：2026-10-24 派发并验收通过（见 [1a-impl-plan.md](../1a-impl-plan.md)“进展”），推送后 CI 运行 40056577654 全部通过（`a67780f`）。依据：CI 运行 40055863970 的 Windows 日志（用户 2026-10-24 提供）。第 1 轮见 [1a-ci-windows-fix.md](1a-ci-windows-fix.md)。
 
 你在 agent-collab 仓库根目录工作。先读 AGENTS.md、docs/context/RUNBOOK.md 的“派发 dsh 任务”和第 1 轮任务书 docs/context/briefs/1a-ci-windows-fix.md（隔离和安全规则照旧有效）。
 

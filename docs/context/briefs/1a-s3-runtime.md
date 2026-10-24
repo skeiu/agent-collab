@@ -1,6 +1,6 @@
 本文件：第 1a 阶段实现第 S3 步（运行时：工作进程、运行目录、CLI）交给 dsh 的任务书原文。派任务时让 dsh 读本文件执行；验收时对照；任务书改版时更新。
 
-> 状态：定稿 2026-10-23，待用户派发。依据：接口契约 [docs/protocol.md](../../protocol.md)【已确认】用户 2026-10-23（第 6 节 `run start` 的 `--designer`、`--designer-model` 是之后补的，用户同日同意）；D20、D21、D23（PLAN.md §3）。和 S2 互不依赖，但在同一个工作目录里，S2 验收完再派本步。
+> 状态：定稿 2026-10-23，2026-10-24 补了“`state.json` 写入失败不退出”一条；S2 已验收，Windows CI 已通过，待用户派发。依据：接口契约 [docs/protocol.md](../../protocol.md)【已确认】用户 2026-10-23（第 6 节 `run start` 的 `--designer`、`--designer-model` 是之后补的，用户同日同意）；D20、D21、D23（PLAN.md §3）。和 S2 互不依赖，但在同一个工作目录里，S2 验收完再派本步。
 
 你在 agent-collab 仓库根目录工作。先读 AGENTS.md、docs/context/RUNBOOK.md 的“派发 dsh 任务”、docs/context/1a-impl-plan.md，再读 docs/protocol.md 的“通用约定”和第 3–6 节（这是本步的接口，全部要实现，`doctor` 除外）。docs/PLAN.md 只读：§3 的 D10、D11、D20、D21、D23；§8 的“阶段 2”到“运行目录和任务状态”；§11.3、§11.4；§13（先用 `grep -n '^#' docs/PLAN.md` 定位，不要全文读）。experiments/1a/17-worker-survival/ 是 D20 的实测（detached 加 unref），可以参考。
 

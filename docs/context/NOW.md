@@ -27,7 +27,7 @@
 
 ## 阻塞与待核实
 
-- 2026-10-23 经用户授权推送 S1、S2（`176eb90`）。CI 在 Linux、macOS 通过；Windows 卡在 `tests/config.test.mjs`（`saveConfig` 改名抛 `EPERM` 后测试挂住），运行已由用户中断。修复（[briefs/1a-ci-windows-fix.md](briefs/1a-ci-windows-fix.md)）2026-10-24 验收通过【已验证】2026-10-24（见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），同日经用户授权提交并推送（`2719951`）。CI 运行 40055863970：Linux、macOS 4 组通过；Windows 两组不再挂住，8 秒跑完，88 个用例只剩并发读写那个失败：改名重试约 1.1 秒用尽仍是 `EPERM`。第 2 轮修复（[briefs/1a-ci-windows-fix2.md](briefs/1a-ci-windows-fix2.md)，重试预算加到 10 秒）2026-10-24 验收通过【已验证】2026-10-24，同日经用户授权提交并推送，Windows 上是否修好待 CI；S3 任务书同步加了“`state.json` 写入失败不退出”。
+- 2026-10-23 经用户授权推送 S1、S2（`176eb90`）。CI 在 Linux、macOS 通过；Windows 卡在 `tests/config.test.mjs`（`saveConfig` 改名抛 `EPERM` 后测试挂住），运行已由用户中断。修复（[briefs/1a-ci-windows-fix.md](briefs/1a-ci-windows-fix.md)）2026-10-24 验收通过【已验证】2026-10-24（见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），同日经用户授权提交并推送（`2719951`）。CI 运行 40055863970：Linux、macOS 4 组通过；Windows 两组不再挂住，8 秒跑完，88 个用例只剩并发读写那个失败：改名重试约 1.1 秒用尽仍是 `EPERM`。第 2 轮修复（[briefs/1a-ci-windows-fix2.md](briefs/1a-ci-windows-fix2.md)，重试预算加到 10 秒）2026-10-24 验收通过【已验证】2026-10-24，同日经用户授权提交并推送（`a67780f`），CI 运行 40056577654 三平台 × Node 20/LTS 共 6 组全部通过【已验证】2026-10-24；S3 任务书同步加了“`state.json` 写入失败不退出”。
 
 - 【待核实】`package.json` 写了 `"license": "MIT"`，但 LICENSE 文件还没建；版权人署名需用户提供（PLAN.md §7.1、§18）。
 - 【待核实】PLAN.md §3 中 D1–D19 的确认人（见 [DECISIONS.md](DECISIONS.md)）。
@@ -36,7 +36,7 @@
 ## 下一步
 
 1. S1 完成：AC1–AC9 和返工 RW1–RW7 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”）。用户验收：尚未进行。2026-10-23 经用户授权提交，未推送。
-2. S0 接口契约 [docs/protocol.md](../protocol.md) 用户审阅原样通过【已确认】用户 2026-10-23，出入已回填 PLAN.md；之后补的 `run start --designer`、`--designer-model` 也已同意【已确认】用户 2026-10-23。S2、S3 任务书定稿（[briefs/1a-s2-bridge.md](briefs/1a-s2-bridge.md)、[briefs/1a-s3-runtime.md](briefs/1a-s3-runtime.md)），按 S2、S3 的顺序派发，一步验收完再派下一步；每次派发前 Claude 先记核对基准。S2 完成：返工 RW1–RW5 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），用户验收尚未进行；2026-10-23 经用户授权提交，未推送。S2 发现的 PLAN.md、protocol.md 回填已通过【已确认】用户 2026-10-23。下一步：派发 S3。
+2. S0 接口契约 [docs/protocol.md](../protocol.md) 用户审阅原样通过【已确认】用户 2026-10-23，出入已回填 PLAN.md；之后补的 `run start --designer`、`--designer-model` 也已同意【已确认】用户 2026-10-23。S2、S3 任务书定稿（[briefs/1a-s2-bridge.md](briefs/1a-s2-bridge.md)、[briefs/1a-s3-runtime.md](briefs/1a-s3-runtime.md)），按 S2、S3 的顺序派发，一步验收完再派下一步；每次派发前 Claude 先记核对基准。S2 完成：返工 RW1–RW5 全部通过【已验证】2026-10-23（证据见 [1a-impl-plan.md](1a-impl-plan.md)“进展”），用户验收尚未进行；2026-10-23 经用户授权提交，同日推送。S2 发现的 PLAN.md、protocol.md 回填已通过【已确认】用户 2026-10-23。下一步：派发 S3，派发前基准已记（2026-10-24，存在本机 `.git/agent-collab-baselines/s3-baseline.txt`，不进仓库）。
 3. P15（Windows 桌面版探针，PLAN.md §17 第 15 项）：任务书 [briefs/1a-p15-desktop-windows.md](briefs/1a-p15-desktop-windows.md) 已定稿，待用户派发给 dsh；dsh 交付、Claude 核对空跑后，Windows 上由那台机器的 Claude Code 按 README 执行，这边的 Claude 对照结果文件验收。
 4. 可选：把 CI 里的 `actions/checkout`、`actions/setup-node` 升到面向 Node 24 的新版本，消除弃用警告。
 5. 每次提交和推送都须用户授权。
