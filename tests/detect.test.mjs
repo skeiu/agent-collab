@@ -52,7 +52,9 @@ test('POSIX 符号链接：解析出入口 .js，记录 how', async (t) => {
   const resolved = await resolveDshEntry(fake.link, { platform: 'linux', env: process.env });
   assert.equal(resolved.ok, true);
   assert.equal(resolved.how, 'symlink');
-  assert.equal(resolved.file, fake.entry);
+  // 适配器返回的是 realpath 解析后的入口；临时目录本身可能是符号链接（macOS 的 /var → /private/var，
+  // Windows 的 8.3 短文件名），期望值也要按真实路径比较，不能拿未解析的路径。
+  assert.equal(resolved.file, await fsp.realpath(fake.entry));
 });
 
 test('POSIX npm shell 包装：解析 $basedir 指向的入口', async (t) => {
@@ -74,17 +76,19 @@ test('Windows .cmd 包装：纯函数解析 %dp0% 指向的入口', async () => 
 
 test('DSH_HOME 四级优先顺序：配置、环境、登录 shell、默认值', async () => {
   const loginShell = { ok: true, env: { DSH_HOME: '/from/login-shell' }, shell: '/bin/sh' };
+  // resolveDshHome 用 path.resolve 把结果转成当前平台的绝对路径：Windows 上 '/from/config' 会变成
+  // D:\from\config，所以期望值也要用 path.resolve 算，不能写死 POSIX 路径。
   assert.deepEqual(
     await resolveDshHome({ configHome: '/from/config', env: { DSH_HOME: '/from/env' }, platform: 'linux', loginShell }),
-    { home: '/from/config', source: 'config', loginShell: null },
+    { home: path.resolve('/from/config'), source: 'config', loginShell: null },
   );
   assert.deepEqual(
     await resolveDshHome({ configHome: null, env: { DSH_HOME: '/from/env' }, platform: 'linux', loginShell }),
-    { home: '/from/env', source: 'env', loginShell: null },
+    { home: path.resolve('/from/env'), source: 'env', loginShell: null },
   );
   assert.deepEqual(
     await resolveDshHome({ configHome: null, env: {}, platform: 'linux', loginShell }),
-    { home: '/from/login-shell', source: 'login-shell', loginShell },
+    { home: path.resolve('/from/login-shell'), source: 'login-shell', loginShell },
   );
   assert.deepEqual(
     await resolveDshHome({ configHome: null, env: {}, platform: 'linux', homedir: () => path.join('fake', 'home'), loginShell: { ok: false, reason: 'no' } }),

@@ -9,6 +9,7 @@ import { test } from 'node:test';
 import { createAdapter } from '../core/adapters/dsh.mjs';
 import { JsonRpcPeer } from '../core/jsonrpc.mjs';
 import { createDshCase, reportObject, reportText, turnWithReport } from './helpers/dsh-case.mjs';
+import { runDiagnostics } from './helpers/run-harness.mjs';
 
 const fence = String.fromCharCode(96).repeat(3);
 
@@ -153,9 +154,13 @@ test('桥接断开：进行中的一轮以 failed 结束，statusReason 说明�
   const discovery = JSON.parse(await fsp.readFile(path.join(caseApi.dshHome, 'agent-collab', 'bridge-web.json'), 'utf8'));
   process.kill(discovery.pid, 'SIGTERM');
   const wait = await caseApi.waitTask(started.runId);
-  assert.equal(wait.json.status, 'failed', wait.stdout + wait.stderr);
-  assert.equal(wait.json.statusReason, 'dsh_disconnected');
-  const log = await fsp.readFile(path.join(await caseApi.runDir(started.runId), 'worker.log'), 'utf8');
+  const runDir = await caseApi.runDir(started.runId);
+  // 断言失败时带上 state.json、worker.log 最后 40 行和最近事件：CI 上看得出是工作进程崩了
+  // （worker.log 里有未捕获异常的堆栈）还是它没来得及写终态就被判定丢了。
+  const diagnostics = await runDiagnostics(runDir);
+  assert.equal(wait.json.status, 'failed', wait.stdout + wait.stderr + '\n' + diagnostics);
+  assert.equal(wait.json.statusReason, 'dsh_disconnected', wait.stdout + wait.stderr + '\n' + diagnostics);
+  const log = await fsp.readFile(path.join(runDir, 'worker.log'), 'utf8');
   assert.match(log, /dsh 连接断开/);
 });
 

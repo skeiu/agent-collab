@@ -8,7 +8,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { installFakeDsh } from './fake-dsh-install.mjs';
-import { killActiveWorkers, killChild, stopWebFromDiscovery } from './pids.mjs';
+import { killActiveWorkers, killChild, stopWebFromDiscovery, waitWorkersGone } from './pids.mjs';
 
 export { assertExit } from './assert-exit.mjs';
 
@@ -196,9 +196,11 @@ export async function createDshCase(label, options = {}) {
     },
     async cleanup() {
       // 只结束仍在进行中的任务的工作进程；已经停下或结束的任务里，worker.pid 可能已经属于别的进程。
+      // 然后等工作进程退出（有上限、只等不杀）：它可能在任务写下终态后还在收尾，Windows 上会占着运行目录。
       await killActiveWorkers(home);
+      await waitWorkersGone(home);
       await caseApi.stopWebs();
-      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     },
   };
   return caseApi;

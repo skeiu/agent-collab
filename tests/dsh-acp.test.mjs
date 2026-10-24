@@ -98,7 +98,10 @@ test('acp 模式：子进程参数、环境、覆盖层内容和 close 后删除
   assert.deepEqual(overlays, [], 'close() 后覆盖层目录应删除');
 });
 
-test('acp 模式：inheritEnv 为 login-shell 时使用登录 shell 的环境', async (t) => {
+// Windows 没有登录 shell：probeLoginShellEnv 直接返回“不探测”，适配器退回设计端环境，LOGIN_ONLY 一定是 null。
+// PLAN.md（§11.8、§12.2 的 inheritEnv）和 protocol.md 都没有规定 Windows 上 inheritEnv 取 login-shell 时该怎么办
+// （退回报 warning，还是干脆不允许？），这里先跳过，等文档补上规定再按规定断言。
+test('acp 模式：inheritEnv 为 login-shell 时使用登录 shell 的环境', { skip: process.platform === 'win32' ? 'Windows 没有登录 shell，PLAN.md/protocol.md 未规定 inheritEnv 在 Windows 上的行为' : false }, async (t) => {
   const caseApi = await createDshCase('acp-login-shell', {
     config: { dsh: { home: null, profile: 'web', transport: 'acp' }, inheritEnv: 'login-shell' },
     env: { FAKE_ACP_SCRIPT: acpScript() },

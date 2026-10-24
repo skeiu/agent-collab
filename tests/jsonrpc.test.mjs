@@ -236,3 +236,22 @@ test('关闭后发送请求立即失败', async () => {
     closePair(pair);
   }
 });
+
+test('关闭之后底层流再报错不会变成未捕获异常（断线后的 ECONNRESET、EPIPE、EPROTOTYPE）', async () => {
+  const pair = makePair();
+  try {
+    pair.a.close('test close');
+    pair.b.close('test close');
+    // 断线之后底层 socket 还会报一次错（Windows、macOS 上常见）。关闭时把 error 监听器去掉的话，
+    // Node 会把它当成未捕获异常：工作进程直接退出、来不及写终态，run wait 只能记成 worker_lost。
+    assert.ok(pair.bToA.listenerCount('error') > 0, '关闭后不应移除 readable 的 error 监听');
+    assert.ok(pair.aToB.listenerCount('error') > 0, '关闭后不应移除 writable 的 error 监听');
+    pair.bToA.destroy(new Error('late ECONNRESET'));
+    pair.aToB.destroy(new Error('late EPIPE'));
+    await delay(20);
+    assert.equal(pair.a.closed, true);
+    assert.equal(pair.b.closed, true);
+  } finally {
+    closePair(pair);
+  }
+});

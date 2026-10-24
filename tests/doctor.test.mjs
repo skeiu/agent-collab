@@ -69,6 +69,21 @@ test('不是 git 仓库：repo 检查 error、顶层 ok false、退出码 1', as
   assert.equal(result.json.error.code, 'doctor_failed');
 });
 
+test('git 不可用：doctor 仍输出 JSON，git 和 repo 为 error', async (t) => {
+  const caseApi = await createDshCase('doctor-no-git');
+  t.after(() => caseApi.cleanup());
+  // PATH 里没有 git。runCli 用绝对路径启动 node，不需要 PATH；doctor 也不能因此崩掉、只留下堆栈
+  // （protocol.md §6：doctor --json 打印一个 JSON 对象）。
+  const emptyPath = process.platform === 'win32' ? path.join(caseApi.root, 'empty-path') : '/no-such-dir';
+  const result = await caseApi.runCli(['doctor', '--json'], { env: { PATH: emptyPath } });
+  assert.ok(result.json && Array.isArray(result.json.checks), 'doctor 输出不是 JSON：stdout=' + JSON.stringify(result.stdout) + ' stderr=' + JSON.stringify(result.stderr));
+  assertExit(result, 1);
+  assert.equal(check(result, 'git').ok, false);
+  assert.equal(check(result, 'repo').ok, false);
+  assert.equal(result.json.git.isRepo, false);
+  assert.match(check(result, 'repo').message, /git/);
+});
+
 test('工作区有改动：worktree_clean 为 warn 且 ok false，顶层仍 ok', async (t) => {
   const caseApi = await createDshCase('doctor-dirty');
   t.after(() => caseApi.cleanup());
@@ -84,8 +99,11 @@ test('工作区有改动：worktree_clean 为 warn 且 ok false，顶层仍 ok',
 test('找不到 dsh：dsh 检查 error、顶层 ok false、退出码 1', async (t) => {
   const caseApi = await createDshCase('doctor-no-dsh');
   t.after(() => caseApi.cleanup());
-  await writeConfig(caseApi, { dsh: { home: null, profile: 'web', transport: 'auto' } });
-  const result = await caseApi.runCli(['doctor', '--json'], { env: { PATH: '/usr/bin:/bin' } });
+  // 用配置里指向不存在的命令表达“找不到 dsh”。以前是把 PATH 换成 '/usr/bin:/bin'：Windows 上 PATH 还负责
+  // 找 git，这个设置同时去掉了 git（doctor 会崩，见下面“git 不可用”的用例），测的就不是一件事了。
+  const missing = path.join(caseApi.root, 'no-such-dsh', process.platform === 'win32' ? 'dsh.cmd' : 'dsh');
+  await writeConfig(caseApi, { executors: { dsh: { command: missing } }, dsh: { home: null, profile: 'web', transport: 'auto' } });
+  const result = await caseApi.runCli(['doctor', '--json']);
   assertExit(result, 1);
   assert.equal(result.json.ok, false);
   assert.equal(check(result, 'dsh').ok, false);
@@ -149,7 +167,9 @@ test('agent-collab 预设不可用：agent_preset 为 warn 且 ok false', async 
 test('本仓库有进行中的任务：active_run 为 warn 且 ok false', async (t) => {
   const caseApi = await createDshCase('doctor-active');
   t.after(() => caseApi.cleanup());
-  const repoId = repoIdFor(caseApi.repo);
+  // doctor 用 git 给出的仓库根（realpath 之后）算仓库标识；临时目录可能是符号链接
+  // （macOS 的 /var → /private/var，Windows 的 8.3 短文件名），这里也要用真实路径，否则锁写到另一个目录。
+  const repoId = repoIdFor(await fsp.realpath(caseApi.repo));
   const runDir = path.join(caseApi.home, 'runs', repoId, 'T001');
   await fsp.mkdir(runDir, { recursive: true });
   await fsp.writeFile(path.join(caseApi.home, 'runs', repoId, 'active.lock'), JSON.stringify({

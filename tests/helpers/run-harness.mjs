@@ -7,7 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { killChild, killWorkerIfActive, pidAlive } from './pids.mjs';
+import { killChild, killWorkerIfActive, waitForPidGone, waitWorkersGone } from './pids.mjs';
 
 export { assertExit } from './assert-exit.mjs';
 export { killChild, pidAlive } from './pids.mjs';
@@ -67,10 +67,13 @@ export async function createContext(label = 'case') {
     home,
     executors: [],
     async cleanup() {
-      // 先结束仍在进行中的任务的工作进程，再结束假执行端，最后删临时目录。
+      // 先结束仍在进行中的任务的工作进程，等这次用例启动过的工作进程退出，再结束假执行端，最后删临时目录。
+      // 任务刚写下终态时工作进程可能还在释放锁、关适配器（它的当前目录就是运行目录），Windows 上这时
+      // 删目录会 EBUSY；等它们退出（有上限、只等不杀），删目录本身再用 fs.rm 的重试兜底。
       await killLeftoverWorkers(home);
+      await waitWorkersGone(home);
       await stopExecutors(ctx);
-      await fsp.rm(root, { recursive: true, force: true });
+      await fsp.rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
     },
   };
   return ctx;
@@ -357,9 +360,10 @@ export async function killLeftoverWorkers(home, options = {}) {
   }
 }
 
-/** 等 PID 退出。 */
+/** 等 PID 退出；超时抛错。 */
 export async function waitPidGone(pid, timeout = 5000) {
-  return waitFor(() => !pidAlive(pid), { timeout, label: '进程 ' + pid + ' 退出' });
+  if (!await waitForPidGone(pid, timeout)) throw new Error('等待超时：进程 ' + pid + ' 退出');
+  return true;
 }
 
 /** 一份最小合法汇报。 */

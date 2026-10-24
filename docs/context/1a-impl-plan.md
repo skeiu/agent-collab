@@ -171,3 +171,9 @@
   - 重跑：仓库里 `npm test` 3 次 224/224；`chmod 644` 的副本在默认参数和 Node 20 模拟参数下各 224/224（修复前同样方法 23 项失败），均无残留进程。反证：副本里去掉 `killWorkerIfActive` 的状态判断，“任务已经停下或结束时不结束它的 worker.pid”和 `killActiveWorkers` 两个用例失败。
   - 实现：`tests/helpers/pids.mjs` 统一结束进程的规则，`assertExit` 替换了 101 处退出码断言；假 dsh 的 `lib/bin.js` 显式 0755，假 `js-yaml`、`yaml` 改为 CommonJS。dsh 另外发现并修了假 dsh Web 的一个缺陷：信号处理装在写发现文件之后，父进程一看到文件就发 SIGTERM 时会留下陈旧的发现文件；新增测试变量 `FAKE_DSH_WEB_EXIT_AFTER_MS`。Claude 接受这两处。
   - 回填：dev-setup.md（测试变量、清理规则、224/224），RISKS.md R11，RUNBOOK“按 CI 的条件重跑测试”。
+- 2026-10-25 第二轮 CI 修复（[briefs/1a-ci-fix2-macos-windows.md](briefs/1a-ci-fix2-macos-windows.md)，依据 CI 运行 40113907322：Ubuntu 两组通过，macOS、Windows 四组共 22 项失败）由 Claude 按用户授权派发，dsh 交付，验收通过：PC1–PC4 全部通过。【已验证】2026-10-25，Claude 重跑：
+  - 隔离：对照 `cifix2-baseline.txt`，profiles 哈希、用户 dsh Web 进程号不变；会话日志 `workspace-write`，没有审批请求，没有按名字结束进程、读写 `~/.dsh` 或 git 写操作。
+  - 重跑：`npm test` 3 次 227/227，没有测试留下的进程（看到的两个 `run.mjs --worker` 是 S6 真实任务 T001、T002 的工作进程，T002 那个是新发现的缺陷，见 [1a-acceptance.md](1a-acceptance.md)“发现的问题”5）；`chmod 644` 副本默认参数、Node 20 模拟参数各 227/227。PC3：`TMPDIR` 设成指向临时目录的符号链接，改前 detect、doctor 共 2 项失败，改后 21/21。反证：撤回 `core/jsonrpc.mjs` 的修改，新加的“关闭之后底层流再报错”用例失败。
+  - 原因：第 1、2、3 项是测试拿未解析的路径比较（macOS `/var`→`/private/var`、Windows 8.3 短名和盘符）；第 2 项核实过 `doctor` 和 `run start` 都用 `findRepoRoot`（realpath），不是产品缺陷。第 6 项：`stopWebFromDiscovery` 确认进程退出后删掉发现文件。第 7 项：清理前 `waitWorkersGone` 只等不杀（最多 10 秒），`fsp.rm` 加重试。
+  - 两处产品修改（Claude 接受，与 protocol.md 一致，不用改文档）：`JsonRpcPeer._shutdown` 关闭时不再移除 `error` 监听（断线后迟到的 ECONNRESET/EPIPE 会变成未捕获异常，工作进程来不及写终态，`run wait` 记成 `worker_lost`；第 8 项，本机复现不了，dsh 用注入迟到错误的方式确定性复现，`dsh-bridge/lib/jsonrpc.js` 同步）；`doctor` 在 git 不可用时不再崩溃，`git`、`repo` 两项报 `error` 并照常输出 JSON（第 4 项）。
+  - 留下的问题：Windows 上 `inheritEnv: login-shell` 的行为 PLAN.md、protocol.md 都没规定，用例在 Windows 上跳过（[RISKS.md](RISKS.md) R12）。“找不到 dsh”用例改成用配置指向不存在的命令，PATH 里没有 dsh 的情形不再单独测。

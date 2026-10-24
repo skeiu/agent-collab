@@ -285,9 +285,10 @@ export class JsonRpcPeer extends EventEmitter {
     this.readable.off('data', this._onData);
     this.readable.off('end', this._onEnd);
     this.readable.off('close', this._onEnd);
-    this.readable.off('error', this._onError);
-    this.writable.off('error', this._onWritableError);
     this.writable.off('close', this._onWritableClose);
+    // error 监听要保留：关闭之后底层流还会报错（断线时的 ECONNRESET、EPIPE，macOS 上还有 EPROTOTYPE），
+    // 没有监听器时 Node 把它当成未捕获异常，工作进程直接退出、来不及写终态（run wait 只会记成 worker_lost）。
+    // _onError / _onWritableError 只调用 _shutdown，关闭后第一行就返回，不会重复处理。
     const pending = [...this.pending.values()];
     this.pending.clear();
     for (const entry of pending) {

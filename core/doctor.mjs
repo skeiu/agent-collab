@@ -120,7 +120,15 @@ export async function doctorCommand(argv, io = {}, context = {}) {
 
   const home = context.home ?? resolveAgentCollabHome(env);
   const startDir = repoOption ? path.resolve(cwd, repoOption) : cwd;
-  const repoRoot = await findRepoRoot(startDir);
+  let repoRoot = null;
+  let repoProblem = null;
+  try {
+    repoRoot = await findRepoRoot(startDir);
+  } catch (error) {
+    // git 不可用（例如 PATH 里没有 git）时 findRepoRoot 会抛错。doctor 仍要输出一份 JSON（protocol.md §6），
+    // 由 git、repo 两项检查说明原因，不能直接崩掉、只留下一段堆栈。
+    repoProblem = error && error.message ? error.message : String(error);
+  }
   let config = null;
   let configProblem = null;
   let configErrors = [];
@@ -152,7 +160,9 @@ export async function doctorCommand(argv, io = {}, context = {}) {
     head = await readHead(repoRoot);
     dirty = await dirtyPaths(repoRoot);
   }
-  checks.push(check('repo', 'error', Boolean(repoRoot), repoRoot ? 'git 仓库：' + repoRoot : '当前目录不是 git 仓库'));
+  checks.push(check('repo', 'error', Boolean(repoRoot), repoRoot
+    ? 'git 仓库：' + repoRoot
+    : repoProblem ? '判断不了是不是 git 仓库：' + repoProblem : '当前目录不是 git 仓库'));
   checks.push(check('worktree_clean', 'warn', dirty.length === 0, dirty.length === 0 ? '工作区干净' : '工作区有 ' + dirty.length + ' 个改动：' + dirty.slice(0, 5).join(', ')));
 
   const info = await detectDsh({ config, env, cwd: startDir });
